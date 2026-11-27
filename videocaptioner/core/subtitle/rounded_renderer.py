@@ -292,6 +292,7 @@ def render_rounded_video(
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
     encode_device=None,
+    encode_gpu: str = "",
 ) -> None:
     """
     渲染圆角背景字幕到视频（分批overlay方案）
@@ -395,6 +396,7 @@ def render_rounded_video(
             video_encoder=video_encoder,
             output_path=output_path,
             encode_device=encode_device,
+            encode_gpu=encode_gpu,
         )
         if resolved.fallback_reason:
             logger.warning(resolved.fallback_reason)

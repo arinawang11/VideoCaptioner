@@ -105,6 +105,44 @@ def test_coerce_encode_device_aliases():
     assert coerce_video_encode_device("核显") == VideoEncodeDeviceEnum.INTEGRATED
 
 
+def _fake_probe(index, vcodec):
+    return {
+        0: "Intel(R) UHD Graphics 770",
+        1: "Intel(R) Arc(TM) Pro B50 Graphics",
+    }.get(index, "")
+
+
+def test_list_and_select_gpu_by_name(monkeypatch):
+    import videocaptioner.core.utils.video_encoder as ve
+
+    monkeypatch.setattr(ve, "_probe_qsv_device", _fake_probe)
+    monkeypatch.setattr(ve.time, "sleep", lambda _s: None)
+    ve._QSV_DEVICE_NAMES.clear()
+    ve._QSV_PROBE_OK.clear()
+
+    adapters = ve.list_qsv_adapters()
+    assert [a["name"] for a in adapters] == [
+        "Intel(R) UHD Graphics 770",
+        "Intel(R) Arc(TM) Pro B50 Graphics",
+    ]
+    assert adapters[0]["kind"] == "integrated"
+    assert adapters[1]["kind"] == "discrete"
+
+    assert (
+        ve.best_qsv_device("h264_qsv", device_name="Intel(R) UHD Graphics 770") == 0
+    )
+    assert (
+        ve.best_qsv_device(
+            "h264_qsv", device_name="Intel(R) Arc(TM) Pro B50 Graphics"
+        )
+        == 1
+    )
+    # 名称不匹配时退回“优先独显”策略
+    assert ve.best_qsv_device("h264_qsv", device_name="Nonexistent GPU") == 1
+    # 自动/空名称同样按策略选择独显
+    assert ve.best_qsv_device("h264_qsv", device_name="自动（优先独显）") == 1
+
+
 def test_resolve_qsv_falls_back_when_unavailable():
     res_h264 = resolve_video_encoder(
         VideoCodecEnum.H264,

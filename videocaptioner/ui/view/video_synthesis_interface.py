@@ -230,22 +230,20 @@ class VideoSynthesisInterface(QWidget):
         self.video_encoder_button.setMenu(self.video_encoder_menu)
         self.command_bar.addWidget(self.video_encoder_button)
 
-        # 添加编码设备选择（核显 / 独显，硬件编解码与编码器保持一致）
+        # 添加编码设备选择（按 GPU 设备名称，支持多张显卡精确选择）
         self.video_device_button = TransparentDropDownPushButton(
             self.tr("编码设备"), self, FIF.IOT
         )
         self.video_device_button.setFixedHeight(34)
-        self.video_device_button.setMinimumWidth(130)
+        self.video_device_button.setMinimumWidth(150)
         self.video_device_button.setToolTip(
-            self.tr("选择用于硬件编解码的 Intel GPU（核显 / 独显），解码器会与编码器匹配到同一块显卡")
-        )
-        self.video_device_menu = RoundMenu(parent=self)
-        for device in VideoEncodeDeviceEnum:
-            action = Action(text=device.value)
-            action.triggered.connect(
-                lambda checked, d=device.value: self.on_video_device_action_changed(d)
+            self.tr(
+                "按设备名称选择用于硬件编解码的 Intel GPU；解码器会匹配到同一块显卡"
             )
-            self.video_device_menu.addAction(action)
+        )
+        self._device_choices = []
+        self.video_device_menu = RoundMenu(parent=self)
+        self.video_device_menu.aboutToShow.connect(self._refresh_device_menu)
         self.video_device_button.setMenu(self.video_device_menu)
         self.command_bar.addWidget(self.video_device_button)
 
@@ -339,7 +337,36 @@ class VideoSynthesisInterface(QWidget):
         self.video_quality_button.setText(cfg.video_quality.value.value)
         self.video_codec_button.setText(cfg.video_codec.value.value)
         self.video_encoder_button.setText(cfg.video_encoder.value.value)
-        self.video_device_button.setText(cfg.video_encode_device.value.value)
+        self.video_device_button.setText(self._device_display_text())
+
+    def _device_display_text(self) -> str:
+        name = str(cfg.video_encode_gpu.value or "").strip()
+        if not name:
+            return self.tr("自动（优先独显）")
+        for display, adapter_name in self._device_choices:
+            if adapter_name == name:
+                return display
+        return name
+
+    def _refresh_device_menu(self) -> None:
+        """Rebuild the adapter list from the live QSV probe."""
+        from videocaptioner.core.utils.video_encoder import qsv_adapter_choices
+
+        try:
+            self._device_choices = [("自动（优先独显）", "")] + qsv_adapter_choices()
+        except Exception:
+            self._device_choices = [("自动（优先独显）", "")]
+
+        self.video_device_menu.clear()
+        for display, adapter_name in self._device_choices:
+            action = Action(text=display)
+            action.triggered.connect(
+                lambda checked, n=adapter_name, d=display: self.on_video_device_action_changed(
+                    n, d
+                )
+            )
+            self.video_device_menu.addAction(action)
+        self.video_device_button.setText(self._device_display_text())
 
         # 设置样式相关初始值
         self.use_style_action.setChecked(cfg.use_subtitle_style.value)
@@ -476,20 +503,17 @@ class VideoSynthesisInterface(QWidget):
         """处理外部编码器配置变更（仅更新UI状态）"""
         self.video_encoder_button.setText(encoder_text)
 
-    def on_video_device_action_changed(self, device_text: str):
-        """处理编码设备选择（核显 / 独显）"""
-        device_enum = next(
-            (e for e in VideoEncodeDeviceEnum if e.value == device_text), None
-        )
-        if device_enum is None:
-            return
-        cfg.set(cfg.video_encode_device, device_enum)
-        self.video_device_button.setText(device_text)
-        signalBus.video_encode_device_changed.emit(device_text)
+    def on_video_device_action_changed(self, adapter_name: str, display: str = ""):
+        """按设备名称选择编码 GPU（空字符串 = 自动）"""
+        cfg.set(cfg.video_encode_gpu, adapter_name or "")
+        cfg.set(cfg.video_encode_device, VideoEncodeDeviceEnum.AUTO)
+        self.video_device_button.setText(display or self._device_display_text())
+        signalBus.video_encode_device_changed.emit(adapter_name or "")
 
-    def on_video_encode_device_changed(self, device_text: str):
+    def on_video_encode_device_changed(self, adapter_name: str):
         """处理外部编码设备配置变更（仅更新UI状态）"""
-        self.video_device_button.setText(device_text)
+        cfg.set(cfg.video_encode_gpu, adapter_name or "")
+        self.video_device_button.setText(self._device_display_text())
 
     def on_use_style_action_triggered(self, checked: bool):
         """处理使用样式开关点击"""

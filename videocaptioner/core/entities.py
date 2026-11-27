@@ -741,6 +741,7 @@ class SynthesisConfig:
     video_codec: VideoCodecEnum = VideoCodecEnum.H264
     video_encoder: VideoEncoderEnum = VideoEncoderEnum.AUTO
     video_encode_device: VideoEncodeDeviceEnum = VideoEncodeDeviceEnum.AUTO
+    video_encode_gpu: str = ""
     subtitle_layout: SubtitleLayoutEnum = SubtitleLayoutEnum.ORIGINAL_ON_TOP
     # 字幕样式配置
     ass_style: str = ""  # ASS 样式字符串
@@ -756,7 +757,9 @@ class SynthesisConfig:
                 lines.append(f"Render Mode: {self.render_mode.value}")
                 lines.append(f"Video Codec: {self.video_codec.value}")
                 lines.append(f"Video Encoder: {self.video_encoder.value}")
-                lines.append(f"Video Device: {self.video_encode_device.value}")
+                lines.append(
+                    f"Video Device: {self.video_encode_gpu or self.video_encode_device.value}"
+                )
             lines.append(f"Video Quality: {self.video_quality.value}")
             lines.append(f"  CRF: {self.video_quality.get_crf()}")
             lines.append(f"  Preset: {self.video_quality.get_preset()}")

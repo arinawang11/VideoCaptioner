@@ -44,6 +44,7 @@ from videocaptioner.core.utils.cache import disable_cache, enable_cache
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.common.signal_bus import signalBus
 from videocaptioner.ui.components.EditComboBoxSettingCard import EditComboBoxSettingCard
+from videocaptioner.ui.components.GpuSettingCard import GpuComboBoxSettingCard
 from videocaptioner.ui.components.LineEditSettingCard import LineEditSettingCard
 
 
@@ -182,14 +183,16 @@ class SettingInterface(ScrollArea):
             texts=[enc.value for enc in cfg.video_encoder.validator.options],  # type: ignore
             parent=self.subtitleGroup,
         )
-        self.videoDeviceCard = ComboBoxSettingCard(
-            cfg.video_encode_device,
-            FIF.IOT,
-            self.tr("编码设备（核显 / 独显）"),
-            self.tr("双显卡机器可选择用核显或独显做硬件编解码；解码器会自动匹配到所选显卡"),
-            texts=[dev.value for dev in cfg.video_encode_device.validator.options],  # type: ignore
+        self.videoDeviceCard = GpuComboBoxSettingCard(
+            self.tr("编码设备（按设备名称）"),
+            self.tr(
+                "多显卡机器可按设备名称精确选择用于硬件编解码的 Intel GPU；"
+                "解码器会自动匹配到同一块显卡"
+            ),
             parent=self.subtitleGroup,
         )
+        self.videoDeviceCard.setValue(cfg.video_encode_gpu.value)
+        self.videoDeviceCard.valueChanged.connect(self._on_encode_gpu_changed)
 
         # 保存配置卡片
         self.savePathCard = PushSettingCard(
@@ -748,20 +751,18 @@ class SettingInterface(ScrollArea):
         self.videoEncoderCard.comboBox.currentTextChanged.connect(
             signalBus.video_encoder_changed
         )
-        self.videoDeviceCard.comboBox.currentTextChanged.connect(
-            signalBus.video_encode_device_changed
-        )
         signalBus.video_codec_changed.connect(self._on_external_video_codec_changed)
         signalBus.video_encoder_changed.connect(self._on_external_video_encoder_changed)
-        signalBus.video_encode_device_changed.connect(
-            self._on_external_video_device_changed
-        )
+        signalBus.video_encode_device_changed.connect(self._on_encode_gpu_changed)
+
+    def _on_encode_gpu_changed(self, adapter_name: str):
+        cfg.set(cfg.video_encode_gpu, adapter_name or "")
+        if self.videoDeviceCard.value() != (adapter_name or ""):
+            self.videoDeviceCard.setValue(adapter_name or "")
+        self.videoDeviceCard.refresh(adapter_name or "")
 
     def _on_external_video_device_changed(self, text: str):
-        if self.videoDeviceCard.comboBox.currentText() != text:
-            self.videoDeviceCard.comboBox.blockSignals(True)
-            self.videoDeviceCard.comboBox.setCurrentText(text)
-            self.videoDeviceCard.comboBox.blockSignals(False)
+        self.videoDeviceCard.refresh(text)
 
     def _on_external_video_codec_changed(self, text: str):
         if self.videoCodecCard.comboBox.currentText() != text:

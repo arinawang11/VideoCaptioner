@@ -203,6 +203,7 @@ def add_subtitles(
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
     encode_device=None,
+    encode_gpu: str = "",
 ) -> None:
     assert Path(input_file).is_file(), "输入文件不存在"
     assert Path(subtitle_file).is_file(), "字幕文件不存在"
@@ -280,6 +281,7 @@ def add_subtitles(
                     video_encoder=video_encoder,
                     output_path=output,
                     encode_device=encode_device,
+                    encode_gpu=encode_gpu,
                 )
                 if resolved.fallback_reason:
                     logger.warning(resolved.fallback_reason)
@@ -557,6 +559,7 @@ def add_subtitles_with_style(
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
     encode_device=None,
+    encode_gpu: str = "",
 ) -> None:
     """
     根据渲染模式选择合成方式
@@ -590,6 +593,7 @@ def add_subtitles_with_style(
             video_codec=video_codec,
             video_encoder=video_encoder,
             encode_device=encode_device,
+            encode_gpu=encode_gpu,
         )
     else:
         # ASS 样式模式
@@ -605,4 +609,5 @@ def add_subtitles_with_style(
             video_codec=video_codec,
             video_encoder=video_encoder,
             encode_device=encode_device,
+            encode_gpu=encode_gpu,
         )

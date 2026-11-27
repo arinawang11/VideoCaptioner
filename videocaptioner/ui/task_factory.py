@@ -228,6 +228,7 @@ class TaskFactory:
             video_codec=cfg.video_codec.value,
             video_encoder=cfg.video_encoder.value,
             video_encode_device=cfg.video_encode_device.value,
+            video_encode_gpu=cfg.video_encode_gpu.value,
             subtitle_layout=cfg.subtitle_layout.value,
             ass_style=TaskFactory.get_ass_style(cfg.subtitle_style_name.value) if use_style else "",
             rounded_style=TaskFactory.get_rounded_style() if use_style else None,

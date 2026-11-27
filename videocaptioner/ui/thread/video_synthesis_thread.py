@@ -97,6 +97,7 @@ class VideoSynthesisThread(QThread):
                     video_codec=config.video_codec,
                     video_encoder=config.video_encoder,
                     encode_device=config.video_encode_device,
+                    encode_gpu=config.video_encode_gpu,
                 )
 
             self.progress.emit(100, self.tr("合成完成"))

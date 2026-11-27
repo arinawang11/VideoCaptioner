@@ -267,11 +267,15 @@ def resolve_video_encoder(
     available_encoders: Optional[Set[str]] = None,
     probe_hardware: bool = True,
     encode_device: Optional[Union[VideoEncodeDeviceEnum, str]] = None,
+    encode_gpu: str = "",
 ) -> ResolvedVideoEncoder:
     """Pick the concrete FFmpeg ``-c:v`` encoder for ``(codec, encoder)``."""
     codec = coerce_video_codec(video_codec)
     encoder = coerce_video_encoder(video_encoder)
     device_pref = coerce_video_encode_device(encode_device)
+    encode_gpu = str(encode_gpu or "").strip()
+    if "自动" in encode_gpu or encode_gpu.lower() in ("auto", "default"):
+        encode_gpu = ""
     available = available_encoders if available_encoders is not None else list_ffmpeg_encoders()
 
     # WebM only accepts VP8/VP9/AV1.
@@ -312,7 +316,11 @@ def resolve_video_encoder(
     if encoder == VideoEncoderEnum.QSV:
         qsv_name = _QSV_BY_CODEC[codec]
         if _has(qsv_name):
-            device = best_qsv_device(qsv_name, device_pref) if probe_hardware else None
+            device = (
+            best_qsv_device(qsv_name, device_pref, encode_gpu)
+            if probe_hardware
+            else None
+        )
             return ResolvedVideoEncoder(
                 qsv_name,
                 codec,
@@ -336,7 +344,11 @@ def resolve_video_encoder(
     # 4) AUTO: prefer QSV if usable -> SVT-AV1 for AV1 -> CPU software
     qsv_name = _QSV_BY_CODEC[codec]
     if _has(qsv_name):
-        device = best_qsv_device(qsv_name, device_pref) if probe_hardware else None
+        device = (
+            best_qsv_device(qsv_name, device_pref, encode_gpu)
+            if probe_hardware
+            else None
+        )
         return ResolvedVideoEncoder(
             qsv_name,
             codec,
@@ -428,21 +440,56 @@ def _qsv_device_score(name: str) -> int:
     return 1
 
 
+def _normalize_gpu_name(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+
+def list_qsv_adapters(probe_codec: str = "h264_qsv") -> List[dict]:
+    """Enumerate Intel GPU adapters that QSV can initialise.
+
+    Returns ``[{"index": int, "name": str, "kind": "discrete"|"integrated"|"unknown"}]``.
+    """
+    adapters: List[dict] = []
+    for index in range(3):
+        name = _probe_qsv_device(index, probe_codec)
+        if name:
+            score = _qsv_device_score(name)
+            kind = "discrete" if score >= 2 else ("integrated" if score == 0 else "unknown")
+            adapters.append({"index": index, "name": name, "kind": kind})
+            logger.info("QSV adapter #%d: %s (%s)", index, name, kind)
+        time.sleep(0.15)
+    return adapters
+
+
+def qsv_adapter_choices() -> List[tuple[str, str]]:
+    """Return ``[(display_text, adapter_name)]`` for UI selectors."""
+    choices: List[tuple[str, str]] = []
+    labels = {"discrete": "独显", "integrated": "核显", "unknown": "GPU"}
+    for adapter in list_qsv_adapters():
+        kind = labels.get(adapter["kind"], "GPU")
+        choices.append((f"{adapter['name']}  ·  #{adapter['index']} {kind}", adapter["name"]))
+    return choices
+
+
 def best_qsv_device(
     vcodec: str,
     device_pref: Optional[Union[VideoEncodeDeviceEnum, str]] = None,
+    device_name: str = "",
 ) -> Optional[int]:
-    """Find the D3D11 adapter index that can run ``vcodec`` (prefer dGPU).
+    """Find the D3D11 adapter index that can run ``vcodec``.
 
-    ``device_pref`` restricts the search to a discrete or integrated GPU. If
-    the requested class cannot encode the codec, any working adapter is used.
+    ``device_name`` selects a concrete adapter by name (preferred, handles
+    machines with several GPUs). ``device_pref`` restricts the search to a
+    discrete or integrated GPU when no name is given. If the requested device
+    cannot encode the codec, another working adapter is used.
     """
     pref = coerce_video_encode_device(device_pref)
-    candidates: list[tuple[int, int, int]] = []
+    wanted = _normalize_gpu_name(device_name)
+    candidates: list[tuple[int, int, int, str]] = []
     for index in range(2):
         name = _probe_qsv_device(index, vcodec)
         if name:
-            candidates.append((_qsv_device_score(name), -index, index))
+            candidates.append((_qsv_device_score(name), -index, index, name))
             logger.info("QSV %s available on device %d: %s", vcodec, index, name)
         time.sleep(0.2)
     if not candidates:
@@ -452,6 +499,20 @@ def best_qsv_device(
             vcodec,
         )
         return None
+
+    if wanted:
+        for _score, _neg_index, index, name in candidates:
+            if _normalize_gpu_name(name) == wanted:
+                return index
+        for _score, _neg_index, index, name in candidates:
+            if wanted in _normalize_gpu_name(name):
+                return index
+        logger.warning(
+            "Selected GPU %r cannot encode %s or is no longer present; "
+            "falling back to another adapter",
+            device_name,
+            vcodec,
+        )
 
     def _in_pref(score: int) -> bool:
         if pref == VideoEncodeDeviceEnum.DISCRETE:

@@ -284,6 +284,8 @@ class Config(QConfig):
         OptionsValidator(VideoEncodeDeviceEnum),
         EnumSerializer(VideoEncodeDeviceEnum),
     )
+    # 具体 GPU 适配器名称（空 = 按上面的自动/核显/独显策略）；用于多显卡机器按名称精确选择
+    video_encode_gpu = ConfigItem("Video", "VideoEncodeGpu", "")
     use_subtitle_style = ConfigItem("Video", "UseSubtitleStyle", False, BoolValidator())
 
     # ------------------- 字幕样式配置 -------------------
