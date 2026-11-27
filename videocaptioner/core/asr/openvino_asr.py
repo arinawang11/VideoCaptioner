@@ -35,6 +35,7 @@ from __future__ import annotations
 import gc
 import os
 import re
+import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
@@ -634,7 +635,7 @@ class OpenVINOASR(BaseASR):
                 # always runs multi-token prefill instead of 1-token detect.
                 gen_kwargs["language"] = self._npu_detected_language
 
-            result = self.pipeline.generate(clip.tolist(), **gen_kwargs)
+            result = self._generate(clip, gen_kwargs)
 
             if not self.language and not self._npu_detected_language:
                 detected = (getattr(result, "language", "") or "").strip()
@@ -660,11 +661,23 @@ class OpenVINOASR(BaseASR):
         return all_segments
 
     # ------------------------------------------------------------------
+    def _generate(self, audio, config: dict):
+        """Run the pipeline, passing the numpy array directly when possible.
+
+        ``audio.tolist()`` would materialise ~1M Python floats for a 60s chunk
+        before every NPU call; the binding accepts arrays, so only fall back to
+        a list if a particular build rejects it.
+        """
+        try:
+            return self.pipeline.generate(audio, **config)
+        except TypeError:
+            return self.pipeline.generate(audio.tolist(), **config)
+
     def _transcribe_chunk(
         self, chunk: "np.ndarray", offset: float, config: dict
     ) -> List[ASRDataSeg]:
         try:
-            result = self.pipeline.generate(chunk.tolist(), **config)
+            result = self._generate(chunk, config)
         except Exception as e:
             if config.get("word_timestamps") and self._word_ts_supported:
                 # An NPU DEVICE_LOST must go to the NPU fallback in _run():
@@ -685,7 +698,7 @@ class OpenVINOASR(BaseASR):
                 # state; retrying on it shifts/loses segments of the first
                 # window, so start from a fresh pipeline instead.
                 self._rebuild_pipeline()
-                result = self.pipeline.generate(chunk.tolist(), **config)
+                result = self._generate(chunk, config)
             else:
                 raise
 
@@ -739,6 +752,7 @@ class OpenVINOASR(BaseASR):
         config = self._build_config()
 
         all_segments: List[ASRDataSeg] = []
+        started = time.perf_counter()
         for index in range(chunk_count):
             start_sample = index * chunk_samples
             end_sample = min(total_samples, start_sample + chunk_samples)
@@ -752,10 +766,33 @@ class OpenVINOASR(BaseASR):
                 offset,
                 end_sample / 16000.0,
             )
+            chunk_started = time.perf_counter()
             all_segments.extend(self._transcribe_chunk(chunk, offset, config))
+            chunk_elapsed = time.perf_counter() - chunk_started
+            audio_seconds = len(chunk) / 16000.0
+            speed = audio_seconds / chunk_elapsed if chunk_elapsed > 0 else 0.0
+            logger.info(
+                "Chunk %d/%d done in %.1fs: %.1fs audio, %.1fx realtime",
+                index + 1,
+                chunk_count,
+                chunk_elapsed,
+                audio_seconds,
+                speed,
+            )
 
             progress = 20 + int(78 * (index + 1) / chunk_count)
-            callback(progress, f"transcribing {index + 1}/{chunk_count}")
+            callback(
+                progress,
+                f"transcribing {index + 1}/{chunk_count} "
+                f"({chunk_elapsed:.1f}s, {speed:.1f}x realtime)",
+            )
+        total_elapsed = time.perf_counter() - started
+        logger.info(
+            "Transcription finished: %.1fs audio in %.1fs (%.1fx realtime)",
+            total_samples / 16000.0,
+            total_elapsed,
+            (total_samples / 16000.0) / total_elapsed if total_elapsed > 0 else 0.0,
+        )
         return all_segments
 
     def _fallback_after_npu_failure(
