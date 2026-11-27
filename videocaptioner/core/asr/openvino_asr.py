@@ -49,6 +49,7 @@ from ..utils.logger import setup_logger
 from ..utils.model_downloader import (
     OPENVINO_WHISPER_REPOS,
     ensure_openvino_whisper_model,
+    openvino_model_files_complete,
     openvino_whisper_model_dir,
 )
 from .asr_data import ASRData, ASRDataSeg
@@ -416,17 +417,19 @@ class OpenVINOASR(BaseASR):
             else "fp16"
         )
         if precision == "fp16" and not effective_override:
-            # The installer ships the int8 model only; use it on GPU/CPU too
-            # instead of triggering a 1.5GB fp16 download.
+            # Reuse an already-downloaded int8 model on GPU instead of
+            # pulling a separate 1.5GB fp16 copy when fp16 is not installed.
             int8_path = openvino_whisper_model_dir(
                 self.model_dir, self.model_name, precision="int8"
             )
             fp16_path = openvino_whisper_model_dir(
                 self.model_dir, self.model_name, precision="fp16"
             )
-            if int8_path.exists() and not fp16_path.exists():
+            if openvino_model_files_complete(
+                int8_path
+            ) and not openvino_model_files_complete(fp16_path):
                 logger.info(
-                    "Using the bundled int8 model on %s (fp16 model not installed)",
+                    "Reusing existing int8 model on %s (fp16 model not installed)",
                     device,
                 )
                 precision = "int8"
