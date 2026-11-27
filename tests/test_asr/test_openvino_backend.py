@@ -157,3 +157,23 @@ def test_gpu_precision_hint_uses_f32_on_integrated_gpu(monkeypatch):
         lambda: [("GPU.1", "Intel(R) Arc(TM) Pro B50 Graphics (dGPU)")],
     )
     assert _gpu_precision_hint("GPU.1") == ""
+
+
+def test_openvino_required_files_cover_tokenizer_but_not_int8_only_config():
+    """A partial download must not be reported complete.
+
+    The tokenizer files are needed to load the pipeline, but
+    ``openvino_config.json`` only exists in the int8 repos: requiring it would
+    make every fp16 model look incomplete and re-download on each run.
+    """
+    from videocaptioner.core.utils.model_downloader import (
+        OPENVINO_MODEL_REQUIRED_FILES,
+    )
+
+    required = set(OPENVINO_MODEL_REQUIRED_FILES)
+    assert "openvino_tokenizer.xml" in required
+    assert "openvino_tokenizer.bin" in required
+    assert "preprocessor_config.json" in required
+    assert "tokenizer.json" in required
+    assert "vocab.json" in required
+    assert "openvino_config.json" not in required

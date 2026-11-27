@@ -564,7 +564,8 @@ OPENVINO_MODEL_REQUIRED_FILES = (
     "openvino_tokenizer.xml",
     "openvino_tokenizer.bin",
     "preprocessor_config.json",
-    "openvino_config.json",
+    # NOTE: openvino_config.json is int8-only — the fp16 repos on
+    # huggingface.co/OpenVINO do not ship it, so it must not be required.
     "config.json",
     "generation_config.json",
     "tokenizer.json",
