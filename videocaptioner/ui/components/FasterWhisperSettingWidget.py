@@ -1141,6 +1141,14 @@ class FasterWhisperSettingWidget(QWidget):
                     "注意：该核显与显示输出共用硬件，OpenVINO GPU 推理在部分驱动上"
                     "可能导致黑屏/冻屏；稳定性优先请改用 Intel NPU。"
                 )
+        if choice == "intel_npu":
+            model_enum = cfg.faster_whisper_model.value
+            model_name = model_enum.value if isinstance(model_enum, FasterWhisperModelEnum) else ""
+            if model_name in ("medium", "large-v1", "large-v2", "large-v3", "large-v3-turbo"):
+                line1 += "\n" + self.tr(
+                    "提示：Meteor Lake NPU 运行 large/medium 模型可能出现 DEVICE_LOST，"
+                    "NPU 失败会自动回退 CPU；建议改用 small / base。"
+                )
         line2 = self.tr(f"本机检测：{describe_hardware()}")
         return f"{line1}\n{line2}"
 
