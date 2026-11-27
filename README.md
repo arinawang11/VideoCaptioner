@@ -1,3 +1,6 @@
+> **Intel Arc / AI Boost NPU 分支**：本仓库包含 Intel GPU / NPU 本地转录适配，
+> 安装、设备选择与性能说明见 [README-IntelArc.md](README-IntelArc.md)。
+
 <div align="center">
   <img src="./docs/images/logo.png" alt="VideoCaptioner Logo" width="100">
   <h1>VideoCaptioner</h1>
