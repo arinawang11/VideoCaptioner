@@ -128,12 +128,19 @@ Enable-PnpDevice  -InstanceId 'PCI\VEN_8086&DEV_7D1D&SUBSYS_380C17AA&REV_04\3&11
 
 ## 5. 已知限制
 
-1. **NPU 首次编译慢**：缓存为空时约 10 分钟（单核 100% CPU），不是卡死。
-2. **不要强杀推理中的进程**：会让 NPU 进入 `DEVICE_LOST`，需 PnP 复位或重启。
-3. **NPU 仍是低概率失效**：长音频可能触发一次驱动看门狗，应用会自动切 GPU。
-4. **工程样品硬件**：本机 iGPU 为 `DEV_7D03`、NPU 为 `DEV_7D1D`，零售机行为
-   可能不同；不得更新 BIOS。
-5. **词级时间戳**：Intel GPU 不支持 encoder attention 分解，会自动降级为分段
+1. **NPU 首次编译慢**：缓存键首次出现时约 3–4 分钟（主机侧解释模式，单/少核），
+   界面会每 10 秒输出心跳；之后（含重启）通常 3 秒左右命中缓存。
+2. **不要清理 `models\openvino\.cache`（尤其 `.cl_cache`）**：2026-11-27 排查 GPU 编译
+   OOM 时清理过一次，导致旧版可用的 int8 OpenCL 内核缓存丢失；此后 iGPU int8/无 hint
+   路径会以 `CL_OUT_OF_HOST_MEMORY` 或 `0xc0000409` 崩溃，只能使用 f32。
+3. **NPU 长音频仍可能 `DEVICE_LOST`**：`large-v3-turbo` 实测在第 15/24 块触发；
+   应用会回退 **CPU**（不再回退核显），从 0 重新转录，安全但耗时约翻倍。
+   出现后建议重启再试，长音频优先用 CPU 或 `small` 模型。
+4. **核显与显示共享硬件**：手动让 iGPU 跑 OpenVINO 长任务仍有冻屏风险，应用不会
+   自动回退到核显；默认 f32 也只能保证稳定，不能保证比 CPU 快。
+5. **工程样品硬件**：本机 iGPU 为 `DEV_7D55`、NPU 为 `DEV_7D1D`，零售机行为可能不同；
+   不得更新 BIOS。
+6. **词级时间戳**：Intel GPU 不支持 encoder attention 分解，会自动降级为分段
    时间戳。
 
 ---
@@ -144,8 +151,9 @@ Enable-PnpDevice  -InstanceId 'PCI\VEN_8086&DEV_7D1D&SUBSYS_380C17AA&REV_04\3&11
 | --- | --- |
 | 转写开始后立刻报错，日志无 ERROR | GPU/IGC 原生崩溃；确认是否 iGPU 且已启用 f32 |
 | 停在“加载模型”很久 | NPU/GPU 冷编译；等待，或保留 `models/openvino/.cache` |
-| `NPU inference failed ... retrying on Intel GPU` | NPU 看门狗复位；任务会由 GPU 继续 |
+| `NPU inference failed ... falling back to Intel CPU` | NPU 看门狗复位；任务会由 CPU 继续，建议重启后再试 |
 | NPU 一直 `DEVICE_LOST` | PnP 复位 NPU 或重启；不要在同一进程内重建 |
+| iGPU 转录报 `CL_OUT_OF_HOST_MEMORY` / `0xc0000409` | 核显 int8/无 f32 路径不可用；改 CPU 或 f32（应用默认） |
 | `No Intel NPU detected` | 安装 Intel NPU 驱动（≥ 32.0.100.3104） |
 | `No Intel GPU detected` | 安装 Intel 显卡驱动；或改用 `intel_cpu` |
 | 数据/模型路径不对 | 统一使用 `%LOCALAPPDATA%\VideoCaptioner` |
@@ -196,4 +204,6 @@ v8 安装包：245.1 MB，SHA-256
 
 - [`docs/config/intel-arc-gpu.md`](docs/config/intel-arc-gpu.md)：架构、模型、排障
 - [`docs/intel-arc/test-report.md`](docs/intel-arc/test-report.md)：崩溃证据与实测数据
+- [`docs/intel-arc/test-log-2026-11-27.md`](docs/intel-arc/test-log-2026-11-27.md)：v10 实测记录（CPU/GPU/NPU、int8 bug）
+- [`docs/intel-arc/release-v10.md`](docs/intel-arc/release-v10.md)：v10 发布说明与已知问题
 - [`BRANCH.md`](BRANCH.md)：分支变更摘要
