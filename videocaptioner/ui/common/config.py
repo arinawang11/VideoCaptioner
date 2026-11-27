@@ -31,6 +31,7 @@ from videocaptioner.core.entities import (
     TranslatorServiceEnum,
     VadMethodEnum,
     VideoCodecEnum,
+    VideoEncodeDeviceEnum,
     VideoEncoderEnum,
     VideoQualityEnum,
     WhisperModelEnum,
@@ -275,6 +276,13 @@ class Config(QConfig):
         VideoEncoderEnum.AUTO,
         OptionsValidator(VideoEncoderEnum),
         EnumSerializer(VideoEncoderEnum),
+    )
+    video_encode_device = OptionsConfigItem(
+        "Video",
+        "VideoEncodeDevice",
+        VideoEncodeDeviceEnum.AUTO,
+        OptionsValidator(VideoEncodeDeviceEnum),
+        EnumSerializer(VideoEncodeDeviceEnum),
     )
     use_subtitle_style = ConfigItem("Video", "UseSubtitleStyle", False, BoolValidator())
 

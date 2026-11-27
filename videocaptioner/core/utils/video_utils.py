@@ -143,11 +143,13 @@ def check_cuda_available() -> bool:
             ["ffmpeg", "-hwaccels"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=(
                 getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
             ),
         )
-        if "cuda" not in result.stdout.lower():
+        if "cuda" not in (result.stdout or "").lower():
             logger.debug("CUDA not in FFmpeg hwaccels list")
             return False
 
@@ -156,6 +158,8 @@ def check_cuda_available() -> bool:
             ["ffmpeg", "-hide_banner", "-init_hw_device", "cuda"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             creationflags=(
                 getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
             ),
@@ -163,7 +167,7 @@ def check_cuda_available() -> bool:
 
         # 如果stderr中包含"Cannot load cuda" 或 "Failed to load"等Error output，说明CUDA不可用
         if any(
-            error in result.stderr.lower()
+            error in (result.stderr or "").lower()
             for error in ["cannot load cuda", "failed to load", "error"]
         ):
             logger.debug("CUDA device init failed")
@@ -198,6 +202,7 @@ def add_subtitles(
     progress_callback: Optional[Callable] = None,
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
+    encode_device=None,
 ) -> None:
     assert Path(input_file).is_file(), "输入文件不存在"
     assert Path(subtitle_file).is_file(), "字幕文件不存在"
@@ -274,6 +279,7 @@ def add_subtitles(
                     video_codec=video_codec,
                     video_encoder=video_encoder,
                     output_path=output,
+                    encode_device=encode_device,
                 )
                 if resolved.fallback_reason:
                     logger.warning(resolved.fallback_reason)
@@ -550,6 +556,7 @@ def add_subtitles_with_style(
     progress_callback: Optional[Callable] = None,
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
+    encode_device=None,
 ) -> None:
     """
     根据渲染模式选择合成方式
@@ -582,6 +589,7 @@ def add_subtitles_with_style(
             progress_callback=progress_callback,
             video_codec=video_codec,
             video_encoder=video_encoder,
+            encode_device=encode_device,
         )
     else:
         # ASS 样式模式
@@ -596,4 +604,5 @@ def add_subtitles_with_style(
             progress_callback=progress_callback,
             video_codec=video_codec,
             video_encoder=video_encoder,
+            encode_device=encode_device,
         )

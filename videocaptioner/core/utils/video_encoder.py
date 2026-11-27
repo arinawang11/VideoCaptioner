@@ -23,7 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
 
-from ..entities import VideoCodecEnum, VideoEncoderEnum
+from ..entities import VideoCodecEnum, VideoEncodeDeviceEnum, VideoEncoderEnum
 from .logger import setup_logger
 
 logger = setup_logger("video_encoder")
@@ -130,6 +130,29 @@ def coerce_video_encoder(
         "软件编码": VideoEncoderEnum.SOFTWARE,
     }
     return mapping.get(raw, VideoEncoderEnum.AUTO)
+
+
+def coerce_video_encode_device(
+    value: Optional[Union[VideoEncodeDeviceEnum, str]],
+) -> VideoEncodeDeviceEnum:
+    if isinstance(value, VideoEncodeDeviceEnum):
+        return value
+    raw = str(value or "").strip().lower()
+    mapping = {
+        "auto": VideoEncodeDeviceEnum.AUTO,
+        "自动": VideoEncodeDeviceEnum.AUTO,
+        "自动（优先独显）": VideoEncodeDeviceEnum.AUTO,
+        "discrete": VideoEncodeDeviceEnum.DISCRETE,
+        "ddiscrete": VideoEncodeDeviceEnum.DISCRETE,
+        "dgpu": VideoEncodeDeviceEnum.DISCRETE,
+        "独显": VideoEncodeDeviceEnum.DISCRETE,
+        "独显 (dgpu)": VideoEncodeDeviceEnum.DISCRETE,
+        "integrated": VideoEncodeDeviceEnum.INTEGRATED,
+        "igpu": VideoEncodeDeviceEnum.INTEGRATED,
+        "核显": VideoEncodeDeviceEnum.INTEGRATED,
+        "核显 (igpu)": VideoEncodeDeviceEnum.INTEGRATED,
+    }
+    return mapping.get(raw, VideoEncodeDeviceEnum.AUTO)
 
 
 @lru_cache(maxsize=1)
@@ -243,10 +266,12 @@ def resolve_video_encoder(
     *,
     available_encoders: Optional[Set[str]] = None,
     probe_hardware: bool = True,
+    encode_device: Optional[Union[VideoEncodeDeviceEnum, str]] = None,
 ) -> ResolvedVideoEncoder:
     """Pick the concrete FFmpeg ``-c:v`` encoder for ``(codec, encoder)``."""
     codec = coerce_video_codec(video_codec)
     encoder = coerce_video_encoder(video_encoder)
+    device_pref = coerce_video_encode_device(encode_device)
     available = available_encoders if available_encoders is not None else list_ffmpeg_encoders()
 
     # WebM only accepts VP8/VP9/AV1.
@@ -287,7 +312,7 @@ def resolve_video_encoder(
     if encoder == VideoEncoderEnum.QSV:
         qsv_name = _QSV_BY_CODEC[codec]
         if _has(qsv_name):
-            device = best_qsv_device(qsv_name) if probe_hardware else None
+            device = best_qsv_device(qsv_name, device_pref) if probe_hardware else None
             return ResolvedVideoEncoder(
                 qsv_name,
                 codec,
@@ -311,7 +336,7 @@ def resolve_video_encoder(
     # 4) AUTO: prefer QSV if usable -> SVT-AV1 for AV1 -> CPU software
     qsv_name = _QSV_BY_CODEC[codec]
     if _has(qsv_name):
-        device = best_qsv_device(qsv_name) if probe_hardware else None
+        device = best_qsv_device(qsv_name, device_pref) if probe_hardware else None
         return ResolvedVideoEncoder(
             qsv_name,
             codec,
@@ -403,8 +428,16 @@ def _qsv_device_score(name: str) -> int:
     return 1
 
 
-def best_qsv_device(vcodec: str) -> Optional[int]:
-    """Find the D3D11 adapter index that can run ``vcodec`` (prefer dGPU)."""
+def best_qsv_device(
+    vcodec: str,
+    device_pref: Optional[Union[VideoEncodeDeviceEnum, str]] = None,
+) -> Optional[int]:
+    """Find the D3D11 adapter index that can run ``vcodec`` (prefer dGPU).
+
+    ``device_pref`` restricts the search to a discrete or integrated GPU. If
+    the requested class cannot encode the codec, any working adapter is used.
+    """
+    pref = coerce_video_encode_device(device_pref)
     candidates: list[tuple[int, int, int]] = []
     for index in range(2):
         name = _probe_qsv_device(index, vcodec)
@@ -419,8 +452,24 @@ def best_qsv_device(vcodec: str) -> Optional[int]:
             vcodec,
         )
         return None
-    candidates.sort(reverse=True)
-    return candidates[0][2]
+
+    def _in_pref(score: int) -> bool:
+        if pref == VideoEncodeDeviceEnum.DISCRETE:
+            return score >= 2
+        if pref == VideoEncodeDeviceEnum.INTEGRATED:
+            return score == 0
+        return True
+
+    preferred = [item for item in candidates if _in_pref(item[0])]
+    if not preferred:
+        logger.warning(
+            "No %s GPU can encode %s; using another available adapter",
+            pref.value,
+            vcodec,
+        )
+        preferred = candidates
+    preferred.sort(reverse=True)
+    return preferred[0][2]
 
 
 def qsv_device_name(index: Optional[int]) -> str:
@@ -441,6 +490,25 @@ def qsv_hw_args(index: Optional[int]) -> List[str]:
         "-filter_hw_device",
         "hw",
     ]
+
+
+def qsv_decode_args(index: Optional[int]) -> List[str]:
+    """Input-side args that decode with QSV on the *same* adapter as encoding."""
+    if index is None:
+        return []
+    return [
+        "-hwaccel",
+        "qsv",
+        "-hwaccel_device",
+        "hw",
+        "-hwaccel_output_format",
+        "qsv",
+    ]
+
+
+def qsv_download_filter() -> str:
+    """Bring hardware frames back to system memory for CPU subtitle filters."""
+    return "hwdownload,format=nv12"
 
 
 def _map_qsv_preset(preset: str) -> str:

@@ -36,6 +36,7 @@ from videocaptioner.core.entities import (
     SupportedVideoFormats,
     SynthesisTask,
     VideoCodecEnum,
+    VideoEncodeDeviceEnum,
     VideoEncoderEnum,
     VideoQualityEnum,
 )
@@ -229,6 +230,25 @@ class VideoSynthesisInterface(QWidget):
         self.video_encoder_button.setMenu(self.video_encoder_menu)
         self.command_bar.addWidget(self.video_encoder_button)
 
+        # 添加编码设备选择（核显 / 独显，硬件编解码与编码器保持一致）
+        self.video_device_button = TransparentDropDownPushButton(
+            self.tr("编码设备"), self, FIF.IOT
+        )
+        self.video_device_button.setFixedHeight(34)
+        self.video_device_button.setMinimumWidth(130)
+        self.video_device_button.setToolTip(
+            self.tr("选择用于硬件编解码的 Intel GPU（核显 / 独显），解码器会与编码器匹配到同一块显卡")
+        )
+        self.video_device_menu = RoundMenu(parent=self)
+        for device in VideoEncodeDeviceEnum:
+            action = Action(text=device.value)
+            action.triggered.connect(
+                lambda checked, d=device.value: self.on_video_device_action_changed(d)
+            )
+            self.video_device_menu.addAction(action)
+        self.video_device_button.setMenu(self.video_device_menu)
+        self.command_bar.addWidget(self.video_device_button)
+
         # 添加分隔符
         self.command_bar.addSeparator()
 
@@ -308,6 +328,7 @@ class VideoSynthesisInterface(QWidget):
         signalBus.video_quality_changed.connect(self.on_video_quality_changed)
         signalBus.video_codec_changed.connect(self.on_video_codec_changed)
         signalBus.video_encoder_changed.connect(self.on_video_encoder_changed)
+        signalBus.video_encode_device_changed.connect(self.on_video_encode_device_changed)
         signalBus.use_subtitle_style_changed.connect(self.on_use_style_changed)
         signalBus.subtitle_render_mode_changed.connect(self.on_render_mode_changed_external)
 
@@ -318,6 +339,7 @@ class VideoSynthesisInterface(QWidget):
         self.video_quality_button.setText(cfg.video_quality.value.value)
         self.video_codec_button.setText(cfg.video_codec.value.value)
         self.video_encoder_button.setText(cfg.video_encoder.value.value)
+        self.video_device_button.setText(cfg.video_encode_device.value.value)
 
         # 设置样式相关初始值
         self.use_style_action.setChecked(cfg.use_subtitle_style.value)
@@ -454,6 +476,21 @@ class VideoSynthesisInterface(QWidget):
         """处理外部编码器配置变更（仅更新UI状态）"""
         self.video_encoder_button.setText(encoder_text)
 
+    def on_video_device_action_changed(self, device_text: str):
+        """处理编码设备选择（核显 / 独显）"""
+        device_enum = next(
+            (e for e in VideoEncodeDeviceEnum if e.value == device_text), None
+        )
+        if device_enum is None:
+            return
+        cfg.set(cfg.video_encode_device, device_enum)
+        self.video_device_button.setText(device_text)
+        signalBus.video_encode_device_changed.emit(device_text)
+
+    def on_video_encode_device_changed(self, device_text: str):
+        """处理外部编码设备配置变更（仅更新UI状态）"""
+        self.video_device_button.setText(device_text)
+
     def on_use_style_action_triggered(self, checked: bool):
         """处理使用样式开关点击"""
         cfg.set(cfg.use_subtitle_style, checked)
@@ -512,6 +549,7 @@ class VideoSynthesisInterface(QWidget):
         self.video_quality_button.setEnabled(hard_sub)
         self.video_codec_button.setEnabled(hard_sub)
         self.video_encoder_button.setEnabled(hard_sub)
+        self.video_device_button.setEnabled(hard_sub)
 
         # 渲染模式按钮需要同时满足：合成视频开启 且 使用样式开启
         self._update_style_controls_state()

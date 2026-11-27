@@ -186,6 +186,14 @@ class VideoEncoderEnum(Enum):
     SOFTWARE = "软件编码"
 
 
+class VideoEncodeDeviceEnum(Enum):
+    """视频合成使用的 Intel GPU（核显 / 独显）"""
+
+    AUTO = "自动（优先独显）"
+    DISCRETE = "独显 (dGPU)"
+    INTEGRATED = "核显 (iGPU)"
+
+
 class VideoQualityEnum(Enum):
     """视频合成质量"""
 
@@ -732,6 +740,7 @@ class SynthesisConfig:
     video_quality: VideoQualityEnum = VideoQualityEnum.MEDIUM
     video_codec: VideoCodecEnum = VideoCodecEnum.H264
     video_encoder: VideoEncoderEnum = VideoEncoderEnum.AUTO
+    video_encode_device: VideoEncodeDeviceEnum = VideoEncodeDeviceEnum.AUTO
     subtitle_layout: SubtitleLayoutEnum = SubtitleLayoutEnum.ORIGINAL_ON_TOP
     # 字幕样式配置
     ass_style: str = ""  # ASS 样式字符串
@@ -747,6 +756,7 @@ class SynthesisConfig:
                 lines.append(f"Render Mode: {self.render_mode.value}")
                 lines.append(f"Video Codec: {self.video_codec.value}")
                 lines.append(f"Video Encoder: {self.video_encoder.value}")
+                lines.append(f"Video Device: {self.video_encode_device.value}")
             lines.append(f"Video Quality: {self.video_quality.value}")
             lines.append(f"  CRF: {self.video_quality.get_crf()}")
             lines.append(f"  Preset: {self.video_quality.get_preset()}")

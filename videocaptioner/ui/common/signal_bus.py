@@ -22,6 +22,8 @@ class SignalBus(QObject):
     video_codec_changed = pyqtSignal(str)
     # 视频编码器信号
     video_encoder_changed = pyqtSignal(str)
+    # 视频编码设备信号
+    video_encode_device_changed = pyqtSignal(str)
     # 使用样式信号
     use_subtitle_style_changed = pyqtSignal(bool)
     # 渲染模式变更信号

@@ -20,6 +20,8 @@ from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_encoder import (
     build_audio_encode_args,
     build_video_encode_args,
+    qsv_decode_args,
+    qsv_download_filter,
     qsv_hw_args,
     resolve_video_encoder,
     software_fallback_for,
@@ -289,6 +291,7 @@ def render_rounded_video(
     reference_height: int = 720,
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
+    encode_device=None,
 ) -> None:
     """
     渲染圆角背景字幕到视频（分批overlay方案）
@@ -391,6 +394,7 @@ def render_rounded_video(
             video_codec=video_codec,
             video_encoder=video_encoder,
             output_path=output_path,
+            encode_device=encode_device,
         )
         if resolved.fallback_reason:
             logger.warning(resolved.fallback_reason)
@@ -402,12 +406,14 @@ def render_rounded_video(
                 resolved.qsv_device_name,
             )
 
-        encode_attempts = [resolved.vcodec]
+        encode_attempts: list[tuple[str, bool]] = [
+            (resolved.vcodec, bool(resolved.is_hardware and resolved.qsv_device is not None))
+        ]
         if resolved.is_hardware:
-            encode_attempts.append(resolved.vcodec)
+            encode_attempts.append((resolved.vcodec, False))
             fb = software_fallback_for(resolved.vcodec, resolved.codec)
-            if fb not in encode_attempts:
-                encode_attempts.append(fb)
+            if fb not in [item[0] for item in encode_attempts]:
+                encode_attempts.append((fb, False))
 
         ordered = sorted(subtitle_frames, key=lambda item: item[0])
         overlaps = any(
@@ -439,11 +445,11 @@ def render_rounded_video(
             concat_file.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
 
             single_pass_ok = False
-            for attempt_idx, active_vcodec in enumerate(encode_attempts):
+            for attempt_idx, (active_vcodec, use_hw_decode) in enumerate(encode_attempts):
                 if attempt_idx > 0:
                     logger.warning(
                         "Encoder %s failed, retrying with %s",
-                        encode_attempts[attempt_idx - 1],
+                        encode_attempts[attempt_idx - 1][0],
                         active_vcodec,
                     )
                     time.sleep(0.3)
@@ -452,6 +458,14 @@ def render_rounded_video(
                     if active_vcodec.endswith("_qsv")
                     else []
                 )
+                if use_hw_decode:
+                    hw_args = hw_args + qsv_decode_args(resolved.qsv_device)
+                base_filter = (
+                    f"[0:v]{qsv_download_filter()}[base];[base][1:v]"
+                    if use_hw_decode
+                    else "[0:v][1:v]"
+                )
+                filter_expr = f"{base_filter}overlay=0:0,format=yuv420p[v]"
                 cmd = [
                     "ffmpeg",
                     "-y",
@@ -465,7 +479,7 @@ def render_rounded_video(
                     "-i",
                     str(concat_file),
                     "-filter_complex",
-                    "[0:v][1:v]overlay=0:0,format=yuv420p[v]",
+                    filter_expr,
                     "-map",
                     "[v]",
                     "-map",
@@ -482,7 +496,11 @@ def render_rounded_video(
                     output_path,
                 ]
                 logger.debug("FFmpeg single-pass cmd: %s", subprocess.list2cmdline(cmd))
-                logger.info("Rounded video synthesis encoder: %s", active_vcodec)
+                logger.info(
+                    "Rounded video synthesis encoder: %s (decode: %s)",
+                    active_vcodec,
+                    "QSV" if use_hw_decode else "software",
+                )
                 if progress_callback:
                     progress_callback(30, f"单次合成 [{active_vcodec}]")
                 result = subprocess.run(
@@ -548,20 +566,21 @@ def render_rounded_video(
                 f"Processing batch {batch_idx + 1}/{total_batches}（{len(batch_frames)}个字幕）"
             )
             # 中间批次继续用无损 ultrafast libx264 追求速度；最终批次按用户选择的编码器输出
+            # （分批回退路径仅在字幕重叠时使用，保持软件解码以兼容复杂滤镜图）
             if is_last_batch:
-                final_attempts = encode_attempts
+                final_attempts = [(vcodec, False) for vcodec, _ in encode_attempts]
             else:
-                final_attempts = ["libx264"]
+                final_attempts = [("libx264", False)]
 
-            used_vcodec = final_attempts[0]
+            used_vcodec = final_attempts[0][0]
             result = None
-            for attempt_idx, active_vcodec in enumerate(final_attempts):
+            for attempt_idx, (active_vcodec, use_hw_decode) in enumerate(final_attempts):
                 used_vcodec = active_vcodec
                 if is_last_batch:
                     if attempt_idx > 0:
                         logger.warning(
-                            "Hardware encoder %s failed, falling back to %s",
-                            final_attempts[attempt_idx - 1],
+                            "Encoder %s failed, falling back to %s",
+                            final_attempts[attempt_idx - 1][0],
                             active_vcodec,
                         )
                     encode_args = build_video_encode_args(

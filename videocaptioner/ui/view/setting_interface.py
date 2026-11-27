@@ -172,6 +172,14 @@ class SettingInterface(ScrollArea):
             texts=[enc.value for enc in cfg.video_encoder.validator.options],  # type: ignore
             parent=self.subtitleGroup,
         )
+        self.videoDeviceCard = ComboBoxSettingCard(
+            cfg.video_encode_device,
+            FIF.IOT,
+            self.tr("编码设备（核显 / 独显）"),
+            self.tr("双显卡机器可选择用核显或独显做硬件编解码；解码器会自动匹配到所选显卡"),
+            texts=[dev.value for dev in cfg.video_encode_device.validator.options],  # type: ignore
+            parent=self.subtitleGroup,
+        )
 
         # 保存配置卡片
         self.savePathCard = PushSettingCard(
@@ -263,6 +271,7 @@ class SettingInterface(ScrollArea):
         self.subtitleGroup.addSettingCard(self.videoQualityCard)
         self.subtitleGroup.addSettingCard(self.videoCodecCard)
         self.subtitleGroup.addSettingCard(self.videoEncoderCard)
+        self.subtitleGroup.addSettingCard(self.videoDeviceCard)
 
         self.saveGroup.addSettingCard(self.savePathCard)
         self.saveGroup.addSettingCard(self.cacheEnabledCard)
@@ -715,8 +724,20 @@ class SettingInterface(ScrollArea):
         self.videoEncoderCard.comboBox.currentTextChanged.connect(
             signalBus.video_encoder_changed
         )
+        self.videoDeviceCard.comboBox.currentTextChanged.connect(
+            signalBus.video_encode_device_changed
+        )
         signalBus.video_codec_changed.connect(self._on_external_video_codec_changed)
         signalBus.video_encoder_changed.connect(self._on_external_video_encoder_changed)
+        signalBus.video_encode_device_changed.connect(
+            self._on_external_video_device_changed
+        )
+
+    def _on_external_video_device_changed(self, text: str):
+        if self.videoDeviceCard.comboBox.currentText() != text:
+            self.videoDeviceCard.comboBox.blockSignals(True)
+            self.videoDeviceCard.comboBox.setCurrentText(text)
+            self.videoDeviceCard.comboBox.blockSignals(False)
 
     def _on_external_video_codec_changed(self, text: str):
         if self.videoCodecCard.comboBox.currentText() != text:

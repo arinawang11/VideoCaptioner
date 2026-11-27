@@ -154,6 +154,13 @@ def _video_has_audio(video_path: str) -> bool:
         "json",
         video_path,
     ]
-    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    result = subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     data = json.loads(result.stdout or "{}")
     return bool(data.get("streams"))

@@ -254,6 +254,11 @@ def _build_synthesize_parser(subparsers) -> None:
         help="Video encoder backend for hard subtitles: auto, qsv, svt, software (default: auto)",
     )
     opt.add_argument(
+        "--video-device",
+        choices=["auto", "dgpu", "igpu"],
+        help="Intel GPU used for hardware encode/decode (default: auto, prefers dGPU)",
+    )
+    opt.add_argument(
         "--layout",
         choices=["target-above", "source-above", "target-only", "source-only"],
         help="Subtitle layout for bilingual output (default: target-above)",

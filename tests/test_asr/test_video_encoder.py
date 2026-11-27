@@ -5,7 +5,10 @@ from videocaptioner.core.utils.video_encoder import (
     build_audio_encode_args,
     build_video_encode_args,
     coerce_video_codec,
+    coerce_video_encode_device,
     coerce_video_encoder,
+    qsv_decode_args,
+    qsv_download_filter,
     qsv_hw_args,
     resolve_video_encoder,
 )
@@ -77,6 +80,29 @@ def test_qsv_hw_args_bind_specific_adapter():
         "-filter_hw_device",
         "hw",
     ]
+
+
+def test_qsv_decode_args_match_encoder_adapter():
+    assert qsv_decode_args(None) == []
+    assert qsv_decode_args(1) == [
+        "-hwaccel",
+        "qsv",
+        "-hwaccel_device",
+        "hw",
+        "-hwaccel_output_format",
+        "qsv",
+    ]
+    assert qsv_download_filter() == "hwdownload,format=nv12"
+
+
+def test_coerce_encode_device_aliases():
+    from videocaptioner.core.entities import VideoEncodeDeviceEnum
+
+    assert coerce_video_encode_device("auto") == VideoEncodeDeviceEnum.AUTO
+    assert coerce_video_encode_device("dgpu") == VideoEncodeDeviceEnum.DISCRETE
+    assert coerce_video_encode_device("独显") == VideoEncodeDeviceEnum.DISCRETE
+    assert coerce_video_encode_device("igpu") == VideoEncodeDeviceEnum.INTEGRATED
+    assert coerce_video_encode_device("核显") == VideoEncodeDeviceEnum.INTEGRATED
 
 
 def test_resolve_qsv_falls_back_when_unavailable():

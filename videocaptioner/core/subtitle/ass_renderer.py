@@ -20,6 +20,8 @@ from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_encoder import (
     build_audio_encode_args,
     build_video_encode_args,
+    qsv_decode_args,
+    qsv_download_filter,
     qsv_hw_args,
     resolve_video_encoder,
     software_fallback_for,
@@ -240,14 +242,16 @@ def _get_video_resolution(video_path: str) -> Tuple[int, int]:
         ["ffmpeg", "-i", video_path],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         creationflags=(
             getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         ),
     )
 
-    # 从 ffmpeg 输出中解析分辨率
+    # 从 ffmpeg 输出中解析分辨率（stderr 可能因解码失败为 None）
     pattern = r"(\d{2,5})x(\d{2,5})"
-    match = re.search(pattern, result.stderr)
+    match = re.search(pattern, result.stderr or "")
     if match:
         return int(match.group(1)), int(match.group(2))
     return 1920, 1080  # 默认返回 1080P
@@ -265,6 +269,7 @@ def render_ass_video(
     reference_height: int = 720,
     video_codec: Optional[VideoCodecEnum] = None,
     video_encoder: Optional[VideoEncoderEnum] = None,
+    encode_device=None,
 ) -> None:
     """
     渲染 ASS 样式字幕到视频（硬字幕）
@@ -318,6 +323,7 @@ def render_ass_video(
             video_codec=video_codec,
             video_encoder=video_encoder,
             output_path=output_path,
+            encode_device=encode_device,
         )
         if resolved.fallback_reason:
             logger.warning(resolved.fallback_reason)
@@ -328,22 +334,25 @@ def render_ass_video(
         # 统一使用 ass 滤镜
         vf = f"ass='{subtitle_path_escaped}':fontsdir='{fonts_dir_escaped}'"
 
-        attempts = [resolved.vcodec]
+        attempts: list[tuple[str, bool]] = [
+            (resolved.vcodec, bool(resolved.is_hardware and resolved.qsv_device is not None))
+        ]
         if resolved.is_hardware:
             # Retry the same hardware encoder once: transient QSV session
             # failures happen when several sessions are created in a row.
-            attempts.append(resolved.vcodec)
+            attempts.append((resolved.vcodec, False))
             fb = software_fallback_for(resolved.vcodec, resolved.codec)
-            if fb not in attempts:
-                attempts.append(fb)
+            if fb not in [item[0] for item in attempts]:
+                attempts.append((fb, False))
 
         last_error: Optional[Exception] = None
-        for attempt_idx, active_vcodec in enumerate(attempts):
+        for attempt_idx, (active_vcodec, use_hw_decode) in enumerate(attempts):
             if attempt_idx > 0:
                 logger.warning(
-                    "Encoder %s failed, retrying with %s",
-                    attempts[attempt_idx - 1],
+                    "Encoder %s failed, retrying with %s%s",
+                    attempts[attempt_idx - 1][0],
                     active_vcodec,
+                    "" if not use_hw_decode else " (hw decode)",
                 )
                 time.sleep(0.3)
                 if progress_callback:
@@ -356,7 +365,11 @@ def render_ass_video(
                     resolved.qsv_device,
                     resolved.qsv_device_name,
                 )
-            logger.info("ASS video synthesis encoder: %s", active_vcodec)
+            logger.info(
+                "ASS video synthesis encoder: %s (decode: %s)",
+                active_vcodec,
+                "QSV" if use_hw_decode else "software",
+            )
             if progress_callback:
                 progress_callback("1", f"编码中 [{active_vcodec}]")
 
@@ -364,6 +377,8 @@ def render_ass_video(
             cmd = ["ffmpeg"]
             if active_vcodec.endswith("_qsv"):
                 cmd.extend(qsv_hw_args(resolved.qsv_device))
+                if use_hw_decode:
+                    cmd.extend(qsv_decode_args(resolved.qsv_device))
             elif use_cuda:
                 logger.debug("Using CUDA acceleration")
                 cmd.extend(["-hwaccel", "cuda"])
@@ -375,7 +390,8 @@ def render_ass_video(
                     active_vcodec, crf=crf, preset=preset, output_path=output_path
                 )
             )
-            cmd.extend(["-vf", vf, "-y", output_path])
+            active_vf = f"{qsv_download_filter()},{vf}" if use_hw_decode else vf
+            cmd.extend(["-vf", active_vf, "-y", output_path])
 
             cmd_str = subprocess.list2cmdline(cmd)
             logger.debug(f"FFmpeg ASS render cmd: {cmd_str}")
