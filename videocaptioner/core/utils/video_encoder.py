@@ -17,10 +17,11 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union
 
 from ..entities import VideoCodecEnum, VideoEncoderEnum
 from .logger import setup_logger
@@ -58,6 +59,10 @@ _ENCODER_DISPLAY = {
 
 _ENCODER_LINE_RE = re.compile(r"^\s*V[A-Z\.]{5}\s+([A-Za-z0-9_\-]+)\s+")
 
+# Adapter names discovered while probing QSV devices, keyed by D3D11 index.
+_QSV_PROBE_OK: Dict[tuple[int, str], str] = {}
+_QSV_DEVICE_NAMES: Dict[int, str] = {}
+
 
 @dataclass(frozen=True)
 class ResolvedVideoEncoder:
@@ -67,6 +72,8 @@ class ResolvedVideoEncoder:
     codec: VideoCodecEnum
     requested_encoder: VideoEncoderEnum
     fallback_reason: str = ""
+    qsv_device: Optional[int] = None
+    qsv_device_name: str = ""
 
     @property
     def is_hardware(self) -> bool:
@@ -279,14 +286,21 @@ def resolve_video_encoder(
     # 2) Explicit Intel QSV
     if encoder == VideoEncoderEnum.QSV:
         qsv_name = _QSV_BY_CODEC[codec]
-        if _hw_ok(qsv_name):
-            return ResolvedVideoEncoder(qsv_name, codec, encoder)
+        if _has(qsv_name):
+            device = best_qsv_device(qsv_name) if probe_hardware else None
+            return ResolvedVideoEncoder(
+                qsv_name,
+                codec,
+                encoder,
+                qsv_device=device,
+                qsv_device_name=qsv_device_name(device),
+            )
         fb = software_fallback_for(qsv_name, codec)
         return ResolvedVideoEncoder(
             fb,
             codec,
             encoder,
-            fallback_reason=f"本机不可用 {qsv_name}，已自动回退到 {fb}",
+            fallback_reason=f"当前 FFmpeg 未内置 {qsv_name}，已回退到 {fb}",
         )
 
     # 3) Explicit CPU software encoder
@@ -296,12 +310,137 @@ def resolve_video_encoder(
 
     # 4) AUTO: prefer QSV if usable -> SVT-AV1 for AV1 -> CPU software
     qsv_name = _QSV_BY_CODEC[codec]
-    if _hw_ok(qsv_name):
-        return ResolvedVideoEncoder(qsv_name, codec, encoder)
+    if _has(qsv_name):
+        device = best_qsv_device(qsv_name) if probe_hardware else None
+        return ResolvedVideoEncoder(
+            qsv_name,
+            codec,
+            encoder,
+            qsv_device=device,
+            qsv_device_name=qsv_device_name(device),
+        )
     if codec == VideoCodecEnum.AV1 and _has("libsvtav1"):
         return ResolvedVideoEncoder("libsvtav1", codec, encoder)
     sw = _pick_software_encoder(codec, available)
     return ResolvedVideoEncoder(sw, codec, encoder)
+
+
+def _probe_qsv_device(index: int, vcodec: str) -> str:
+    """Return the adapter name if D3D11VA device ``index`` can encode ``vcodec``.
+
+    Empty string means the device cannot initialise this QSV encoder (for
+    example Intel UHD Graphics cannot encode AV1). QSV picks the first adapter
+    by default, which is why AV1 silently fell back to software on machines
+    where the iGPU is enumerated before a discrete Arc card.
+    """
+    cached = _QSV_PROBE_OK.get((index, vcodec))
+    if cached:
+        return cached
+    if vcodec not in list_ffmpeg_encoders():
+        return ""
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "verbose",
+        "-init_hw_device",
+        f"d3d11va=d3d:{index}",
+        "-init_hw_device",
+        "qsv=hw@d3d",
+        "-filter_hw_device",
+        "hw",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=128x128:r=30:d=0.2",
+        "-frames:v",
+        "2",
+        "-c:v",
+        vcodec,
+    ]
+    if vcodec == "vp9_qsv":
+        cmd.extend(["-low_power", "1"])
+    cmd.extend(["-pix_fmt", "nv12", "-f", "null", "-"])
+    proc = None
+    for attempt in range(2):
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=25,
+                creationflags=_CREATIONFLAGS,
+            )
+        except Exception as exc:
+            logger.debug("QSV probe %s on device %d failed: %s", vcodec, index, exc)
+            proc = None
+        if proc is not None and proc.returncode == 0:
+            break
+        if attempt == 0:
+            time.sleep(0.3)
+    if proc is None or proc.returncode != 0:
+        return ""
+    match = re.search(
+        r"Using device\s+[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\s+\((.+)\)", proc.stderr or ""
+    )
+    name = match.group(1).strip() if match else f"QSV device {index}"
+    _QSV_DEVICE_NAMES[index] = name
+    _QSV_PROBE_OK[(index, vcodec)] = name
+    return name
+
+
+def _qsv_device_score(name: str) -> int:
+    """Higher is better: prefer discrete Arc cards over integrated graphics."""
+    lowered = (name or "").lower()
+    if any(tag in lowered for tag in ("pro ", "b50", "b57", "b58", "a77", "a75", "a58", "a38", "a31")):
+        return 3
+    if "arc" in lowered and "graphics" not in lowered:
+        return 2
+    if any(tag in lowered for tag in ("uhd", "iris", "igpu")):
+        return 0
+    return 1
+
+
+def best_qsv_device(vcodec: str) -> Optional[int]:
+    """Find the D3D11 adapter index that can run ``vcodec`` (prefer dGPU)."""
+    candidates: list[tuple[int, int, int]] = []
+    for index in range(2):
+        name = _probe_qsv_device(index, vcodec)
+        if name:
+            candidates.append((_qsv_device_score(name), -index, index))
+            logger.info("QSV %s available on device %d: %s", vcodec, index, name)
+        time.sleep(0.2)
+    if not candidates:
+        logger.warning(
+            "QSV probe did not find a working adapter for %s; "
+            "will try the default QSV device at runtime",
+            vcodec,
+        )
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][2]
+
+
+def qsv_device_name(index: Optional[int]) -> str:
+    if index is None:
+        return ""
+    return _QSV_DEVICE_NAMES.get(index, "")
+
+
+def qsv_hw_args(index: Optional[int]) -> List[str]:
+    """FFmpeg global args that bind QSV to a specific D3D11 adapter."""
+    if index is None:
+        return []
+    return [
+        "-init_hw_device",
+        f"d3d11va=d3d:{index}",
+        "-init_hw_device",
+        "qsv=hw@d3d",
+        "-filter_hw_device",
+        "hw",
+    ]
 
 
 def _map_qsv_preset(preset: str) -> str:

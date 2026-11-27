@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
@@ -19,6 +20,7 @@ from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_encoder import (
     build_audio_encode_args,
     build_video_encode_args,
+    qsv_hw_args,
     resolve_video_encoder,
     software_fallback_for,
 )
@@ -383,7 +385,133 @@ def render_rounded_video(
         if not subtitle_frames:
             raise ValueError("No valid subtitle images generated")
 
-        # 步骤2: 分批overlay到视频 (30-100%)
+        # 步骤2: 优先单次合成（concat 字幕轨 + 一次 overlay），避免多批次中间转码
+        logger.debug("Rendering subtitles in a single pass")
+        resolved = resolve_video_encoder(
+            video_codec=video_codec,
+            video_encoder=video_encoder,
+            output_path=output_path,
+        )
+        if resolved.fallback_reason:
+            logger.warning(resolved.fallback_reason)
+        if resolved.qsv_device_name:
+            logger.info(
+                "QSV device for %s: #%s %s",
+                resolved.vcodec,
+                resolved.qsv_device,
+                resolved.qsv_device_name,
+            )
+
+        encode_attempts = [resolved.vcodec]
+        if resolved.is_hardware:
+            encode_attempts.append(resolved.vcodec)
+            fb = software_fallback_for(resolved.vcodec, resolved.codec)
+            if fb not in encode_attempts:
+                encode_attempts.append(fb)
+
+        ordered = sorted(subtitle_frames, key=lambda item: item[0])
+        overlaps = any(
+            ordered[i + 1][0] < ordered[i][1] - 1e-3 for i in range(len(ordered) - 1)
+        )
+
+        if overlaps:
+            logger.info("Overlapping subtitles detected; using batched overlay path")
+        else:
+            blank_png = temp_path / "blank.png"
+            Image.new("RGBA", (width, height), (0, 0, 0, 0)).save(blank_png, "PNG")
+            concat_lines = ["ffconcat version 1.0"]
+            cursor = 0.0
+            for start_time, end_time, png_path in ordered:
+                start_time = max(0.0, start_time)
+                end_time = max(start_time + 0.05, end_time)
+                gap = start_time - cursor
+                if gap > 0.001:
+                    concat_lines.append(f"file '{blank_png.as_posix()}'")
+                    concat_lines.append(f"duration {gap:.3f}")
+                concat_lines.append(f"file '{png_path.as_posix()}'")
+                concat_lines.append(f"duration {end_time - start_time:.3f}")
+                cursor = end_time
+            if cursor < video_duration:
+                concat_lines.append(f"file '{blank_png.as_posix()}'")
+                concat_lines.append(f"duration {max(0.05, video_duration - cursor):.3f}")
+            concat_lines.append(f"file '{blank_png.as_posix()}'")
+            concat_file = temp_path / "subs.ffconcat"
+            concat_file.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
+
+            single_pass_ok = False
+            for attempt_idx, active_vcodec in enumerate(encode_attempts):
+                if attempt_idx > 0:
+                    logger.warning(
+                        "Encoder %s failed, retrying with %s",
+                        encode_attempts[attempt_idx - 1],
+                        active_vcodec,
+                    )
+                    time.sleep(0.3)
+                hw_args = (
+                    qsv_hw_args(resolved.qsv_device)
+                    if active_vcodec.endswith("_qsv")
+                    else []
+                )
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    *hw_args,
+                    "-i",
+                    video_path,
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(concat_file),
+                    "-filter_complex",
+                    "[0:v][1:v]overlay=0:0,format=yuv420p[v]",
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "0:a?",
+                    "-t",
+                    str(video_duration),
+                    *build_video_encode_args(
+                        active_vcodec,
+                        crf=crf,
+                        preset=preset,
+                        output_path=output_path,
+                    ),
+                    *build_audio_encode_args(output_path),
+                    output_path,
+                ]
+                logger.debug("FFmpeg single-pass cmd: %s", subprocess.list2cmdline(cmd))
+                logger.info("Rounded video synthesis encoder: %s", active_vcodec)
+                if progress_callback:
+                    progress_callback(30, f"单次合成 [{active_vcodec}]")
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        if os.name == "nt"
+                        else 0
+                    ),
+                )
+                if result.returncode == 0:
+                    single_pass_ok = True
+                    break
+                logger.error(
+                    "单次合成失败 (%s): %s", active_vcodec, (result.stderr or "")[-2000:]
+                )
+
+            if single_pass_ok:
+                if progress_callback:
+                    progress_callback(100, "合成完成")
+                logger.debug("Video synthesis complete (single pass)")
+                return
+            logger.warning("Single-pass synthesis failed; falling back to batched overlay")
+
+        # 步骤2b: 回退方案 —— 分批 overlay（兼容重叠字幕与极端输入数量）
         logger.debug("Overlaying subtitle batches onto video")
         BATCH_SIZE = 50
         current_video = video_path
@@ -421,18 +549,7 @@ def render_rounded_video(
             )
             # 中间批次继续用无损 ultrafast libx264 追求速度；最终批次按用户选择的编码器输出
             if is_last_batch:
-                resolved = resolve_video_encoder(
-                    video_codec=video_codec,
-                    video_encoder=video_encoder,
-                    output_path=str(batch_output),
-                )
-                if resolved.fallback_reason:
-                    logger.warning(resolved.fallback_reason)
-                final_attempts = [resolved.vcodec]
-                if resolved.is_hardware:
-                    fb = software_fallback_for(resolved.vcodec, resolved.codec)
-                    if fb not in final_attempts:
-                        final_attempts.append(fb)
+                final_attempts = encode_attempts
             else:
                 final_attempts = ["libx264"]
 
@@ -468,9 +585,15 @@ def render_rounded_video(
                     audio_args = ["-c:a", "copy"]
 
                 # -t 参数强制保持原视频时长，防止因 overlay ended而截断视频
+                hw_args = (
+                    qsv_hw_args(resolved.qsv_device)
+                    if is_last_batch and active_vcodec.endswith("_qsv")
+                    else []
+                )
                 cmd = [
                     "ffmpeg",
                     "-y",
+                    *hw_args,
                     *input_args,
                     "-filter_complex",
                     filter_complex,

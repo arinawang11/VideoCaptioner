@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Tuple
 
@@ -19,6 +20,7 @@ from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_encoder import (
     build_audio_encode_args,
     build_video_encode_args,
+    qsv_hw_args,
     resolve_video_encoder,
     software_fallback_for,
 )
@@ -328,6 +330,9 @@ def render_ass_video(
 
         attempts = [resolved.vcodec]
         if resolved.is_hardware:
+            # Retry the same hardware encoder once: transient QSV session
+            # failures happen when several sessions are created in a row.
+            attempts.append(resolved.vcodec)
             fb = software_fallback_for(resolved.vcodec, resolved.codec)
             if fb not in attempts:
                 attempts.append(fb)
@@ -336,20 +341,30 @@ def render_ass_video(
         for attempt_idx, active_vcodec in enumerate(attempts):
             if attempt_idx > 0:
                 logger.warning(
-                    "Hardware encoder %s failed, falling back to %s",
+                    "Encoder %s failed, retrying with %s",
                     attempts[attempt_idx - 1],
                     active_vcodec,
                 )
+                time.sleep(0.3)
                 if progress_callback:
                     progress_callback("5", f"回退至 {active_vcodec}")
 
+            if active_vcodec.endswith("_qsv") and resolved.qsv_device_name:
+                logger.info(
+                    "QSV device for %s: #%s %s",
+                    active_vcodec,
+                    resolved.qsv_device,
+                    resolved.qsv_device_name,
+                )
             logger.info("ASS video synthesis encoder: %s", active_vcodec)
             if progress_callback:
                 progress_callback("1", f"编码中 [{active_vcodec}]")
 
             use_cuda = (not active_vcodec.endswith("_qsv")) and _check_cuda_available()
             cmd = ["ffmpeg"]
-            if use_cuda:
+            if active_vcodec.endswith("_qsv"):
+                cmd.extend(qsv_hw_args(resolved.qsv_device))
+            elif use_cuda:
                 logger.debug("Using CUDA acceleration")
                 cmd.extend(["-hwaccel", "cuda"])
 

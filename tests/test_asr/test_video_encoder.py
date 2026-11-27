@@ -6,6 +6,7 @@ from videocaptioner.core.utils.video_encoder import (
     build_video_encode_args,
     coerce_video_codec,
     coerce_video_encoder,
+    qsv_hw_args,
     resolve_video_encoder,
 )
 
@@ -63,6 +64,19 @@ def test_resolve_qsv_across_all_four_codecs():
         assert res.vcodec == expected
         assert res.is_hardware is True
         assert res.fallback_reason == ""
+
+
+def test_qsv_hw_args_bind_specific_adapter():
+    assert qsv_hw_args(None) == []
+    args = qsv_hw_args(1)
+    assert args == [
+        "-init_hw_device",
+        "d3d11va=d3d:1",
+        "-init_hw_device",
+        "qsv=hw@d3d",
+        "-filter_hw_device",
+        "hw",
+    ]
 
 
 def test_resolve_qsv_falls_back_when_unavailable():
