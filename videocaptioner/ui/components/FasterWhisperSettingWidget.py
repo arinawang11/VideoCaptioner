@@ -1142,6 +1142,10 @@ class FasterWhisperSettingWidget(QWidget):
                     "可能导致黑屏/冻屏；稳定性优先请改用 Intel NPU。"
                 )
         if choice == "intel_npu":
+            line1 += "\n" + self.tr(
+                "首次编译约 3–4 分钟，结果会缓存；之后（含重启）加载约 3 秒，"
+                "请勿删除 models\\openvino\\.cache。"
+            )
             model_enum = cfg.faster_whisper_model.value
             model_name = model_enum.value if isinstance(model_enum, FasterWhisperModelEnum) else ""
             if model_name in ("medium", "large-v1", "large-v2", "large-v3", "large-v3-turbo"):

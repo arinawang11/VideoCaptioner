@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -35,9 +37,31 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+_heartbeat_stop = threading.Event()
+
+
 def emit_progress(percent, message):
     message = str(message).replace("\n", " ").replace("\r", " ")
+    if message.startswith("设备:") or "transcribing" in message or int(percent) >= 100:
+        # Model loading is done; stop the compile heartbeat.
+        _heartbeat_stop.set()
     print(f"PROGRESS {int(percent)}|{message}", flush=True)
+
+
+def _compile_heartbeat() -> None:
+    """Keep the UI informed while the NPU compiler is busy (3-4 minutes).
+
+    The compiler is host-side and single/few-threaded; without a heartbeat the
+    task looks frozen at "正在探测/加载". Emit elapsed time every 10s until the
+    first device/transcribing message arrives.
+    """
+    started = time.perf_counter()
+    while not _heartbeat_stop.wait(10):
+        elapsed = int(time.perf_counter() - started)
+        emit_progress(
+            1,
+            f"正在编译/加载模型…已用 {elapsed} 秒（首次约 3–4 分钟，之后走缓存）",
+        )
 
 
 def main() -> int:
@@ -56,6 +80,8 @@ def main() -> int:
     parser.add_argument("--words", action="store_true")
     args = parser.parse_args()
 
+    threading.Thread(target=_compile_heartbeat, daemon=True).start()
+
     from videocaptioner.core.asr.openvino_asr import OpenVINOASR
 
     asr = OpenVINOASR(
@@ -70,6 +96,7 @@ def main() -> int:
         gpu_name=args.gpu_name,
     )
     data = asr.run(callback=emit_progress)
+    _heartbeat_stop.set()
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
