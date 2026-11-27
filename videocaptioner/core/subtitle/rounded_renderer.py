@@ -10,8 +10,18 @@ from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 
 from PIL import Image, ImageDraw
 
-from videocaptioner.core.entities import SubtitleLayoutEnum
+from videocaptioner.core.entities import (
+    SubtitleLayoutEnum,
+    VideoCodecEnum,
+    VideoEncoderEnum,
+)
 from videocaptioner.core.utils.logger import setup_logger
+from videocaptioner.core.utils.video_encoder import (
+    build_audio_encode_args,
+    build_video_encode_args,
+    resolve_video_encoder,
+    software_fallback_for,
+)
 
 from .font_utils import FontType, get_font
 from .styles import RoundedBgStyle
@@ -275,6 +285,8 @@ def render_rounded_video(
     preset: str = "medium",
     progress_callback: Optional[Callable] = None,
     reference_height: int = 720,
+    video_codec: Optional[VideoCodecEnum] = None,
+    video_encoder: Optional[VideoEncoderEnum] = None,
 ) -> None:
     """
     渲染圆角背景字幕到视频（分批overlay方案）
@@ -404,57 +416,111 @@ def render_rounded_video(
                 output_path if is_last_batch else temp_path / f"batch_{batch_idx:03d}.mp4"
             )
 
-            logger.debug(f"Processing batch {batch_idx + 1}/{total_batches}（{len(batch_frames)}个字幕）")
-            # 构建 ffmpeg Command
-            # -t 参数强制保持原视频时长，防止因 overlay ended而截断视频
-            cmd = [
-                "ffmpeg",
-                "-y",
-                *input_args,
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                final_output,
-                "-map",
-                "0:a?",
-                "-t",
-                str(video_duration),  # 强制保持原视频时长
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast" if not is_last_batch else preset,
-                "-crf",
-                "0" if not is_last_batch else str(crf),
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "copy",
-                str(batch_output),
-            ]
-
-            if batch_idx == 0 or is_last_batch:
-                cmd_str = subprocess.list2cmdline(cmd)
-                logger.debug(f"FFmpeg cmd: {cmd_str}")
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=(
-                    getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-                ),
+            logger.debug(
+                f"Processing batch {batch_idx + 1}/{total_batches}（{len(batch_frames)}个字幕）"
             )
+            # 中间批次继续用无损 ultrafast libx264 追求速度；最终批次按用户选择的编码器输出
+            if is_last_batch:
+                resolved = resolve_video_encoder(
+                    video_codec=video_codec,
+                    video_encoder=video_encoder,
+                    output_path=str(batch_output),
+                )
+                if resolved.fallback_reason:
+                    logger.warning(resolved.fallback_reason)
+                final_attempts = [resolved.vcodec]
+                if resolved.is_hardware:
+                    fb = software_fallback_for(resolved.vcodec, resolved.codec)
+                    if fb not in final_attempts:
+                        final_attempts.append(fb)
+            else:
+                final_attempts = ["libx264"]
 
-            if result.returncode != 0:
-                logger.error(f"批次 {batch_idx + 1} 失败: {result.stderr}")
-                raise RuntimeError(f"Subtitle processing failed（批次 {batch_idx + 1}）")
+            used_vcodec = final_attempts[0]
+            result = None
+            for attempt_idx, active_vcodec in enumerate(final_attempts):
+                used_vcodec = active_vcodec
+                if is_last_batch:
+                    if attempt_idx > 0:
+                        logger.warning(
+                            "Hardware encoder %s failed, falling back to %s",
+                            final_attempts[attempt_idx - 1],
+                            active_vcodec,
+                        )
+                    encode_args = build_video_encode_args(
+                        active_vcodec,
+                        crf=crf,
+                        preset=preset,
+                        output_path=str(batch_output),
+                    )
+                    audio_args = build_audio_encode_args(str(batch_output))
+                else:
+                    encode_args = [
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "ultrafast",
+                        "-crf",
+                        "0",
+                        "-pix_fmt",
+                        "yuv420p",
+                    ]
+                    audio_args = ["-c:a", "copy"]
+
+                # -t 参数强制保持原视频时长，防止因 overlay ended而截断视频
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    *input_args,
+                    "-filter_complex",
+                    filter_complex,
+                    "-map",
+                    final_output,
+                    "-map",
+                    "0:a?",
+                    "-t",
+                    str(video_duration),
+                    *encode_args,
+                    *audio_args,
+                    str(batch_output),
+                ]
+
+                if batch_idx == 0 or is_last_batch:
+                    cmd_str = subprocess.list2cmdline(cmd)
+                    logger.debug(f"FFmpeg cmd: {cmd_str}")
+                    if is_last_batch:
+                        logger.info("Rounded video synthesis encoder: %s", active_vcodec)
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        if os.name == "nt"
+                        else 0
+                    ),
+                )
+                if result.returncode == 0:
+                    break
+                logger.error(
+                    f"批次 {batch_idx + 1} 编码失败 ({active_vcodec}): {result.stderr}"
+                )
+
+            if result is None or result.returncode != 0:
+                raise RuntimeError(
+                    f"Subtitle processing failed（批次 {batch_idx + 1}, {used_vcodec}）"
+                )
 
             # 更新进度 (30-100%)
             if progress_callback:
                 progress = 30 + int((batch_idx + 1) / total_batches * 70)
-                progress_callback(progress, f"合成视频 {batch_idx + 1}/{total_batches}")
+                suffix = f" [{used_vcodec}]" if is_last_batch else ""
+                progress_callback(
+                    progress, f"合成视频 {batch_idx + 1}/{total_batches}{suffix}"
+                )
 
             # 更新当前视频
             current_video = str(batch_output)

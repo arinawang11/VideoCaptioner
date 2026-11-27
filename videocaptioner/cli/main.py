@@ -244,6 +244,16 @@ def _build_synthesize_parser(subparsers) -> None:
              "  low:    CRF 32, fast preset — smallest file",
     )
     opt.add_argument(
+        "--video-codec",
+        choices=["h264", "h265", "av1", "vp9"],
+        help="Output video codec for hard subtitles (default: h264)",
+    )
+    opt.add_argument(
+        "--video-encoder",
+        choices=["auto", "qsv", "svt", "software"],
+        help="Video encoder backend for hard subtitles: auto, qsv, svt, software (default: auto)",
+    )
+    opt.add_argument(
         "--layout",
         choices=["target-above", "source-above", "target-only", "source-only"],
         help="Subtitle layout for bilingual output (default: target-above)",

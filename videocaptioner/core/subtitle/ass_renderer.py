@@ -10,8 +10,18 @@ from typing import TYPE_CHECKING, Callable, Optional, Tuple
 from PIL import Image
 
 from videocaptioner.config import CACHE_PATH, FONTS_PATH, RESOURCE_PATH
-from videocaptioner.core.entities import SubtitleLayoutEnum
+from videocaptioner.core.entities import (
+    SubtitleLayoutEnum,
+    VideoCodecEnum,
+    VideoEncoderEnum,
+)
 from videocaptioner.core.utils.logger import setup_logger
+from videocaptioner.core.utils.video_encoder import (
+    build_audio_encode_args,
+    build_video_encode_args,
+    resolve_video_encoder,
+    software_fallback_for,
+)
 
 from .ass_utils import auto_wrap_ass_file
 
@@ -251,6 +261,8 @@ def render_ass_video(
     preset: str = "medium",
     progress_callback: Optional[Callable] = None,
     reference_height: int = 720,
+    video_codec: Optional[VideoCodecEnum] = None,
+    video_encoder: Optional[VideoEncoderEnum] = None,
 ) -> None:
     """
     渲染 ASS 样式字幕到视频（硬字幕）
@@ -299,11 +311,14 @@ def render_ass_video(
         # 转义字幕路径
         subtitle_path_escaped = Path(processed_subtitle).as_posix().replace(":", r"\:")
 
-        # 构建 FFmpeg Command
-        vcodec = "libx264"
-        if Path(output_path).suffix.lower() == ".webm":
-            vcodec = "libvpx-vp9"
-            logger.debug("WebM format, using libvpx-vp9")
+        # 解析编码格式与编码器（支持 QSV / SVT-AV1 / 软件编码器，自动回退）
+        resolved = resolve_video_encoder(
+            video_codec=video_codec,
+            video_encoder=video_encoder,
+            output_path=output_path,
+        )
+        if resolved.fallback_reason:
+            logger.warning(resolved.fallback_reason)
 
         # 添加内置字体目录支持
         fonts_dir_escaped = FONTS_PATH.as_posix().replace(":", r"\:")
@@ -311,110 +326,128 @@ def render_ass_video(
         # 统一使用 ass 滤镜
         vf = f"ass='{subtitle_path_escaped}':fontsdir='{fonts_dir_escaped}'"
 
-        # 检查 CUDA 是否可用
-        use_cuda = _check_cuda_available()
-        cmd = ["ffmpeg"]
-        if use_cuda:
-            logger.debug("Using CUDA acceleration")
-            cmd.extend(["-hwaccel", "cuda"])
+        attempts = [resolved.vcodec]
+        if resolved.is_hardware:
+            fb = software_fallback_for(resolved.vcodec, resolved.codec)
+            if fb not in attempts:
+                attempts.append(fb)
 
-        cmd.extend(
-            [
-                "-i",
-                video_path,
-                "-acodec",
-                "copy",
-                "-vcodec",
-                vcodec,
-                "-crf",
-                str(crf),
-                "-preset",
-                preset,
-                "-vf",
-                vf,
-                "-y",
-                output_path,
-            ]
-        )
-
-        cmd_str = subprocess.list2cmdline(cmd)
-        logger.debug(f"FFmpeg ASS render cmd: {cmd_str}")
-
-        # 执行 FFmpeg
-        process = None
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=(
-                    getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-                ),
-            )
-
-            # 实时Reading输出并调用回调
-            total_duration = None
-            current_time = 0
-
-            while True:
-                output_line = process.stderr.readline()
-                if not output_line or (process.poll() is not None):
-                    break
-                if not progress_callback:
-                    continue
-
-                # 解析总时长
-                if total_duration is None:
-                    duration_match = re.search(
-                        r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})", output_line
-                    )
-                    if duration_match:
-                        h, m, s = map(float, duration_match.groups())
-                        total_duration = h * 3600 + m * 60 + s
-
-                # 解析当前处理时间
-                time_match = re.search(
-                    r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})", output_line
+        last_error: Optional[Exception] = None
+        for attempt_idx, active_vcodec in enumerate(attempts):
+            if attempt_idx > 0:
+                logger.warning(
+                    "Hardware encoder %s failed, falling back to %s",
+                    attempts[attempt_idx - 1],
+                    active_vcodec,
                 )
-                if time_match:
-                    h, m, s = map(float, time_match.groups())
-                    current_time = h * 3600 + m * 60 + s
+                if progress_callback:
+                    progress_callback("5", f"回退至 {active_vcodec}")
 
-                # 计算进度百分比
-                if total_duration:
-                    progress = (current_time / total_duration) * 100
-                    progress_callback(f"{round(progress)}", "正在合成")
-
+            logger.info("ASS video synthesis encoder: %s", active_vcodec)
             if progress_callback:
-                progress_callback("100", "合成完成")
+                progress_callback("1", f"编码中 [{active_vcodec}]")
 
-            # 检查Return code
-            return_code = process.wait()
-            if return_code != 0:
-                error_info = process.stderr.read()
-                logger.error("FFmpeg ASS rendering failed")
+            use_cuda = (not active_vcodec.endswith("_qsv")) and _check_cuda_available()
+            cmd = ["ffmpeg"]
+            if use_cuda:
+                logger.debug("Using CUDA acceleration")
+                cmd.extend(["-hwaccel", "cuda"])
+
+            cmd.extend(["-i", video_path])
+            cmd.extend(build_audio_encode_args(output_path))
+            cmd.extend(
+                build_video_encode_args(
+                    active_vcodec, crf=crf, preset=preset, output_path=output_path
+                )
+            )
+            cmd.extend(["-vf", vf, "-y", output_path])
+
+            cmd_str = subprocess.list2cmdline(cmd)
+            logger.debug(f"FFmpeg ASS render cmd: {cmd_str}")
+
+            process = None
+            stderr_tail: list[str] = []
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                        if os.name == "nt"
+                        else 0
+                    ),
+                )
+
+                total_duration = None
+                current_time = 0.0
+                assert process.stderr is not None
+
+                while True:
+                    output_line = process.stderr.readline()
+                    if not output_line and process.poll() is not None:
+                        break
+                    if not output_line:
+                        continue
+                    stderr_tail.append(output_line.rstrip())
+                    if len(stderr_tail) > 30:
+                        stderr_tail.pop(0)
+                    if not progress_callback:
+                        continue
+
+                    if total_duration is None:
+                        duration_match = re.search(
+                            r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})", output_line
+                        )
+                        if duration_match:
+                            h, m, s = map(float, duration_match.groups())
+                            total_duration = h * 3600 + m * 60 + s
+
+                    time_match = re.search(
+                        r"time=(\d{2}):(\d{2}):(\d{2}\.\d{2})", output_line
+                    )
+                    if time_match:
+                        h, m, s = map(float, time_match.groups())
+                        current_time = h * 3600 + m * 60 + s
+
+                    if total_duration:
+                        progress = min(99, round((current_time / total_duration) * 100))
+                        progress_callback(f"{progress}", f"正在合成 [{active_vcodec}]")
+
+                return_code = process.wait()
+                if return_code == 0:
+                    if progress_callback:
+                        progress_callback("100", f"合成完成 [{active_vcodec}]")
+                    logger.debug("ASS subtitle rendering complete")
+                    last_error = None
+                    break
+
+                error_info = "\n".join(stderr_tail)
+                logger.error("FFmpeg ASS rendering failed (%s)", active_vcodec)
                 logger.error(f"Return code: {return_code}")
                 logger.error(f"Command: {cmd_str}")
                 if error_info:
                     logger.error(f"Error output: {error_info}")
-                raise Exception(f"FFmpeg Return code: {return_code}")
+                last_error = RuntimeError(
+                    f"FFmpeg Return code: {return_code} ({active_vcodec})"
+                )
 
-            logger.debug("ASS subtitle rendering complete")
+            except subprocess.SubprocessError as e:
+                logger.error("FFmpeg process error: %s", str(e))
+                if process and process.poll() is None:
+                    process.kill()
+                last_error = e
+            except Exception as e:
+                logger.error("ASS subtitle rendering error: %s", str(e))
+                if process and process.poll() is None:
+                    process.kill()
+                last_error = e
 
-        except subprocess.SubprocessError as e:
-            logger.error("FFmpeg process error")
-            logger.error(f"Error: {str(e)}")
-            if process and process.poll() is None:
-                process.kill()
-            raise
-        except Exception as e:
-            logger.error(f"ASS subtitle rendering error: {str(e)}")
-            if process and process.poll() is None:
-                process.kill()
-            raise
+        if last_error is not None:
+            raise last_error
 
     finally:
         # 清理临时文件

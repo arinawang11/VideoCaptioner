@@ -11,12 +11,19 @@ from ..entities import (
     AudioStreamInfo,
     SubtitleLayoutEnum,
     SubtitleRenderModeEnum,
+    VideoCodecEnum,
+    VideoEncoderEnum,
     VideoInfo,
 )
 from ..subtitle.ass_renderer import render_ass_video
 from ..subtitle.ass_utils import auto_wrap_ass_file
 from ..subtitle.rounded_renderer import render_rounded_video
 from ..utils.logger import setup_logger
+from ..utils.video_encoder import (
+    build_audio_encode_args,
+    build_video_encode_args,
+    resolve_video_encoder,
+)
 
 if TYPE_CHECKING:
     from videocaptioner.core.asr.asr_data import ASRData
@@ -189,6 +196,8 @@ def add_subtitles(
     vcodec: str = "libx264",
     soft_subtitle: bool = False,
     progress_callback: Optional[Callable] = None,
+    video_codec: Optional[VideoCodecEnum] = None,
+    video_encoder: Optional[VideoEncoderEnum] = None,
 ) -> None:
     assert Path(input_file).is_file(), "输入文件不存在"
     assert Path(subtitle_file).is_file(), "字幕文件不存在"
@@ -260,34 +269,37 @@ def add_subtitles(
             else:
                 vf = f"subtitles='{subtitle_path_escaped}'"
 
-            if Path(output).suffix.lower() == ".webm":
-                vcodec = "libvpx-vp9"
-                logger.debug("WebM format, using libvpx-vp9")
+            if video_codec is not None or video_encoder is not None:
+                resolved = resolve_video_encoder(
+                    video_codec=video_codec,
+                    video_encoder=video_encoder,
+                    output_path=output,
+                )
+                if resolved.fallback_reason:
+                    logger.warning(resolved.fallback_reason)
+                active_vcodec = resolved.vcodec
+                encode_args = build_video_encode_args(
+                    active_vcodec, crf=crf, preset=preset, output_path=output
+                )
+            else:
+                if Path(output).suffix.lower() == ".webm":
+                    vcodec = "libvpx-vp9"
+                    logger.debug("WebM format, using libvpx-vp9")
+                active_vcodec = vcodec
+                encode_args = build_video_encode_args(
+                    active_vcodec, crf=crf, preset=preset, output_path=output
+                )
 
-            # 检查CUDA是否可用
-            use_cuda = check_cuda_available()
+            # 检查CUDA是否可用（QSV 编码时不叠加 -hwaccel cuda）
+            use_cuda = (not active_vcodec.endswith("_qsv")) and check_cuda_available()
             cmd = ["ffmpeg"]
             if use_cuda:
                 logger.debug("Using CUDA acceleration")
                 cmd.extend(["-hwaccel", "cuda"])
-            cmd.extend(
-                [
-                    "-i",
-                    input_file,
-                    "-acodec",
-                    "copy",
-                    "-vcodec",
-                    vcodec,
-                    "-crf",
-                    str(crf),
-                    "-preset",
-                    preset,
-                    "-vf",
-                    vf,
-                    "-y",
-                    output,
-                ]
-            )
+            cmd.extend(["-i", input_file])
+            cmd.extend(build_audio_encode_args(output))
+            cmd.extend(encode_args)
+            cmd.extend(["-vf", vf, "-y", output])
 
             cmd_str = subprocess.list2cmdline(cmd)
             logger.debug(f"FFmpeg hard subtitle cmd: {cmd_str}")
@@ -536,6 +548,8 @@ def add_subtitles_with_style(
     crf: int = 23,
     preset: PresetType = "medium",
     progress_callback: Optional[Callable] = None,
+    video_codec: Optional[VideoCodecEnum] = None,
+    video_encoder: Optional[VideoEncoderEnum] = None,
 ) -> None:
     """
     根据渲染模式选择合成方式
@@ -551,6 +565,8 @@ def add_subtitles_with_style(
         crf: 视频质量
         preset: FFmpeg 编码预设
         progress_callback: 进度回调
+        video_codec: 视频编码格式
+        video_encoder: 视频编码器
     """
 
     if render_mode == SubtitleRenderModeEnum.ROUNDED_BG:
@@ -564,6 +580,8 @@ def add_subtitles_with_style(
             crf=crf,
             preset=preset,
             progress_callback=progress_callback,
+            video_codec=video_codec,
+            video_encoder=video_encoder,
         )
     else:
         # ASS 样式模式
@@ -576,4 +594,6 @@ def add_subtitles_with_style(
             crf=crf,
             preset=preset,
             progress_callback=progress_callback,
+            video_codec=video_codec,
+            video_encoder=video_encoder,
         )

@@ -35,6 +35,8 @@ from videocaptioner.core.entities import (
     SupportedSubtitleFormats,
     SupportedVideoFormats,
     SynthesisTask,
+    VideoCodecEnum,
+    VideoEncoderEnum,
     VideoQualityEnum,
 )
 from videocaptioner.core.utils.platform_utils import open_folder
@@ -124,10 +126,10 @@ class VideoSynthesisInterface(QWidget):
         self.bottom_layout = QHBoxLayout()
         self.progress_bar = ProgressBar(self)
         self.status_label = BodyLabel(self.tr("就绪"), self)
-        self.status_label.setMinimumWidth(100)  # 设置最小宽度
-        self.status_label.setAlignment(Qt.AlignCenter)  # type: ignore  # 设置文本居中对齐
+        self.status_label.setMinimumWidth(180)
+        self.status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)  # type: ignore
         self.bottom_layout.addWidget(self.progress_bar, 1)  # 进度条使用剩余空间
-        self.bottom_layout.addWidget(self.status_label)  # 状态标签使用固定宽度
+        self.bottom_layout.addWidget(self.status_label)
         self.main_layout.addLayout(self.bottom_layout)
 
     def _setup_command_bar(self):
@@ -190,6 +192,42 @@ class VideoSynthesisInterface(QWidget):
             self.video_quality_menu.addAction(action)
         self.video_quality_button.setMenu(self.video_quality_menu)
         self.command_bar.addWidget(self.video_quality_button)
+
+        # 添加视频编码格式选择下拉按钮
+        self.video_codec_button = TransparentDropDownPushButton(
+            self.tr("编码格式"), self, FIF.MOVIE
+        )
+        self.video_codec_button.setFixedHeight(34)
+        self.video_codec_button.setMinimumWidth(120)
+        self.video_codec_button.setToolTip(self.tr("选择输出视频编码格式（H.264 / H.265 / AV1 / VP9）"))
+        self.video_codec_menu = RoundMenu(parent=self)
+        for codec in VideoCodecEnum:
+            action = Action(text=codec.value)
+            action.triggered.connect(
+                lambda checked, c=codec.value: self.on_video_codec_action_changed(c)
+            )
+            self.video_codec_menu.addAction(action)
+        self.video_codec_button.setMenu(self.video_codec_menu)
+        self.command_bar.addWidget(self.video_codec_button)
+
+        # 添加视频编码器选择下拉按钮
+        self.video_encoder_button = TransparentDropDownPushButton(
+            self.tr("编码器"), self, FIF.IOT
+        )
+        self.video_encoder_button.setFixedHeight(34)
+        self.video_encoder_button.setMinimumWidth(120)
+        self.video_encoder_button.setToolTip(
+            self.tr("选择视频编码器（自动 / Intel QSV 硬件 / SVT-AV1 / CPU 软件编码）")
+        )
+        self.video_encoder_menu = RoundMenu(parent=self)
+        for enc in VideoEncoderEnum:
+            action = Action(text=enc.value)
+            action.triggered.connect(
+                lambda checked, e=enc.value: self.on_video_encoder_action_changed(e)
+            )
+            self.video_encoder_menu.addAction(action)
+        self.video_encoder_button.setMenu(self.video_encoder_menu)
+        self.command_bar.addWidget(self.video_encoder_button)
 
         # 添加分隔符
         self.command_bar.addSeparator()
@@ -268,6 +306,8 @@ class VideoSynthesisInterface(QWidget):
         signalBus.soft_subtitle_changed.connect(self.on_soft_subtitle_changed)
         signalBus.need_video_changed.connect(self.on_need_video_changed)
         signalBus.video_quality_changed.connect(self.on_video_quality_changed)
+        signalBus.video_codec_changed.connect(self.on_video_codec_changed)
+        signalBus.video_encoder_changed.connect(self.on_video_encoder_changed)
         signalBus.use_subtitle_style_changed.connect(self.on_use_style_changed)
         signalBus.subtitle_render_mode_changed.connect(self.on_render_mode_changed_external)
 
@@ -276,6 +316,8 @@ class VideoSynthesisInterface(QWidget):
         self.soft_subtitle_action.setChecked(cfg.soft_subtitle.value)
         self.need_video_action.setChecked(cfg.need_video.value)
         self.video_quality_button.setText(cfg.video_quality.value.value)
+        self.video_codec_button.setText(cfg.video_codec.value.value)
+        self.video_encoder_button.setText(cfg.video_encoder.value.value)
 
         # 设置样式相关初始值
         self.use_style_action.setChecked(cfg.use_subtitle_style.value)
@@ -285,6 +327,7 @@ class VideoSynthesisInterface(QWidget):
     def on_soft_subtitle_action_triggered(self, checked: bool):
         """处理软字幕按钮点击（更新配置+显示InfoBar）"""
         cfg.set(cfg.soft_subtitle, checked)
+        self._update_synthesis_controls_state()
 
         # 显示说明信息
         if checked:
@@ -312,6 +355,7 @@ class VideoSynthesisInterface(QWidget):
     def on_soft_subtitle_changed(self, checked: bool):
         """处理外部软字幕配置变更（仅更新UI状态）"""
         self.soft_subtitle_action.setChecked(checked)
+        self._update_synthesis_controls_state()
 
     def on_need_video_action_triggered(self, checked: bool):
         """处理视频合成按钮点击（更新配置+显示InfoBar）"""
@@ -359,6 +403,56 @@ class VideoSynthesisInterface(QWidget):
     def on_video_quality_changed(self, quality_text: str):
         """处理外部质量配置变更（仅更新UI状态）"""
         self.video_quality_button.setText(quality_text)
+
+    def on_video_codec_action_changed(self, codec_text: str):
+        """处理编码格式选择"""
+        codec_enum = next((e for e in VideoCodecEnum if e.value == codec_text), None)
+        if codec_enum is None:
+            return
+        cfg.set(cfg.video_codec, codec_enum)
+        self.video_codec_button.setText(codec_text)
+        signalBus.video_codec_changed.emit(codec_text)
+
+        if codec_enum != VideoCodecEnum.AV1 and cfg.video_encoder.value == VideoEncoderEnum.SVT:
+            cfg.set(cfg.video_encoder, VideoEncoderEnum.AUTO)
+            self.video_encoder_button.setText(VideoEncoderEnum.AUTO.value)
+            signalBus.video_encoder_changed.emit(VideoEncoderEnum.AUTO.value)
+            InfoBar.info(
+                self.tr("编码器已切换"),
+                self.tr(f"SVT-AV1 仅支持 AV1，{codec_text} 已自动切换为自动选择编码器"),
+                duration=3000,
+                position=InfoBarPosition.BOTTOM,
+                parent=self,
+            )
+
+    def on_video_codec_changed(self, codec_text: str):
+        """处理外部编码格式配置变更（仅更新UI状态）"""
+        self.video_codec_button.setText(codec_text)
+
+    def on_video_encoder_action_changed(self, encoder_text: str):
+        """处理编码器选择"""
+        encoder_enum = next((e for e in VideoEncoderEnum if e.value == encoder_text), None)
+        if encoder_enum is None:
+            return
+        cfg.set(cfg.video_encoder, encoder_enum)
+        self.video_encoder_button.setText(encoder_text)
+        signalBus.video_encoder_changed.emit(encoder_text)
+
+        if encoder_enum == VideoEncoderEnum.SVT and cfg.video_codec.value != VideoCodecEnum.AV1:
+            cfg.set(cfg.video_codec, VideoCodecEnum.AV1)
+            self.video_codec_button.setText(VideoCodecEnum.AV1.value)
+            signalBus.video_codec_changed.emit(VideoCodecEnum.AV1.value)
+            InfoBar.info(
+                self.tr("编码格式已切换"),
+                self.tr("SVT-AV1 仅支持 AV1 格式，已自动切换为 AV1"),
+                duration=3000,
+                position=InfoBarPosition.BOTTOM,
+                parent=self,
+            )
+
+    def on_video_encoder_changed(self, encoder_text: str):
+        """处理外部编码器配置变更（仅更新UI状态）"""
+        self.video_encoder_button.setText(encoder_text)
 
     def on_use_style_action_triggered(self, checked: bool):
         """处理使用样式开关点击"""
@@ -410,11 +504,14 @@ class VideoSynthesisInterface(QWidget):
     def _update_synthesis_controls_state(self):
         """更新所有合成相关控件的启用/禁用状态"""
         need_video = self.need_video_action.isChecked()
+        hard_sub = need_video and (not self.soft_subtitle_action.isChecked())
 
-        # 合成视频关闭时，禁用所有相关选项
+        # 合成视频关闭时，禁用所有相关选项；软字幕模式不重编码，禁用编码参数
         self.soft_subtitle_action.setEnabled(need_video)
         self.use_style_action.setEnabled(need_video)
-        self.video_quality_button.setEnabled(need_video)
+        self.video_quality_button.setEnabled(hard_sub)
+        self.video_codec_button.setEnabled(hard_sub)
+        self.video_encoder_button.setEnabled(hard_sub)
 
         # 渲染模式按钮需要同时满足：合成视频开启 且 使用样式开启
         self._update_style_controls_state()
@@ -511,6 +608,7 @@ class VideoSynthesisInterface(QWidget):
     def on_video_synthesis_progress(self, progress, message):
         self.progress_bar.setValue(progress)
         self.status_label.setText(message)
+        self.status_label.setToolTip(message)
 
     def on_video_synthesis_error(self, error):
         self.synthesize_button.setEnabled(True)

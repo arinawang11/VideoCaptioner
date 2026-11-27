@@ -224,6 +224,8 @@ class TaskFactory:
             soft_subtitle=cfg.soft_subtitle.value,
             render_mode=cfg.subtitle_render_mode.value,
             video_quality=cfg.video_quality.value,
+            video_codec=cfg.video_codec.value,
+            video_encoder=cfg.video_encoder.value,
             subtitle_layout=cfg.subtitle_layout.value,
             ass_style=TaskFactory.get_ass_style(cfg.subtitle_style_name.value) if use_style else "",
             rounded_style=TaskFactory.get_rounded_style() if use_style else None,

@@ -168,6 +168,24 @@ class SubtitleRenderModeEnum(Enum):
     ROUNDED_BG = "圆角背景"  # Pillow 圆角矩形背景
 
 
+class VideoCodecEnum(Enum):
+    """视频合成编码格式"""
+
+    H264 = "H.264"
+    H265 = "H.265 (HEVC)"
+    AV1 = "AV1"
+    VP9 = "VP9"
+
+
+class VideoEncoderEnum(Enum):
+    """视频合成编码器"""
+
+    AUTO = "自动"
+    QSV = "Intel QSV"
+    SVT = "SVT-AV1"
+    SOFTWARE = "软件编码"
+
+
 class VideoQualityEnum(Enum):
     """视频合成质量"""
 
@@ -698,6 +716,8 @@ class SynthesisConfig:
     soft_subtitle: bool = True
     render_mode: SubtitleRenderModeEnum = SubtitleRenderModeEnum.ASS_STYLE
     video_quality: VideoQualityEnum = VideoQualityEnum.MEDIUM
+    video_codec: VideoCodecEnum = VideoCodecEnum.H264
+    video_encoder: VideoEncoderEnum = VideoEncoderEnum.AUTO
     subtitle_layout: SubtitleLayoutEnum = SubtitleLayoutEnum.ORIGINAL_ON_TOP
     # 字幕样式配置
     ass_style: str = ""  # ASS 样式字符串
@@ -711,6 +731,8 @@ class SynthesisConfig:
             lines.append(f"Subtitle Type: {'Soft' if self.soft_subtitle else 'Hard'}")
             if not self.soft_subtitle:
                 lines.append(f"Render Mode: {self.render_mode.value}")
+                lines.append(f"Video Codec: {self.video_codec.value}")
+                lines.append(f"Video Encoder: {self.video_encoder.value}")
             lines.append(f"Video Quality: {self.video_quality.value}")
             lines.append(f"  CRF: {self.video_quality.get_crf()}")
             lines.append(f"  Preset: {self.video_quality.get_preset()}")

@@ -50,6 +50,11 @@ jobs:
           videocaptioner/core/asr/openvino_process.py
           videocaptioner/core/asr/openvino_worker.py
           videocaptioner/core/utils/hardware.py
+          videocaptioner/core/utils/video_encoder.py
 
       - name: Unit tests (Intel backend)
-        run: uv run pytest tests/test_asr/test_openvino_backend.py -q
+        run: >-
+          uv run pytest
+          tests/test_asr/test_openvino_backend.py
+          tests/test_asr/test_video_encoder.py
+          -q

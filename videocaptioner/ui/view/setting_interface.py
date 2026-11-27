@@ -156,6 +156,22 @@ class SettingInterface(ScrollArea):
             texts=[quality.value for quality in cfg.video_quality.validator.options],  # type: ignore
             parent=self.subtitleGroup,
         )
+        self.videoCodecCard = ComboBoxSettingCard(
+            cfg.video_codec,
+            FIF.MOVIE,
+            self.tr("视频编码格式"),
+            self.tr("硬字幕输出的视频编码格式（H.264 / H.265 / AV1 / VP9）"),
+            texts=[codec.value for codec in cfg.video_codec.validator.options],  # type: ignore
+            parent=self.subtitleGroup,
+        )
+        self.videoEncoderCard = ComboBoxSettingCard(
+            cfg.video_encoder,
+            FIF.IOT,
+            self.tr("视频编码器"),
+            self.tr("自动优先 Intel QSV 硬件加速；也支持指定 Intel QSV / SVT-AV1 / 软件编码"),
+            texts=[enc.value for enc in cfg.video_encoder.validator.options],  # type: ignore
+            parent=self.subtitleGroup,
+        )
 
         # 保存配置卡片
         self.savePathCard = PushSettingCard(
@@ -245,6 +261,8 @@ class SettingInterface(ScrollArea):
         self.subtitleGroup.addSettingCard(self.needVideoCard)
         self.subtitleGroup.addSettingCard(self.softSubtitleCard)
         self.subtitleGroup.addSettingCard(self.videoQualityCard)
+        self.subtitleGroup.addSettingCard(self.videoCodecCard)
+        self.subtitleGroup.addSettingCard(self.videoEncoderCard)
 
         self.saveGroup.addSettingCard(self.savePathCard)
         self.saveGroup.addSettingCard(self.cacheEnabledCard)
@@ -691,6 +709,26 @@ class SettingInterface(ScrollArea):
         self.videoQualityCard.comboBox.currentTextChanged.connect(
             signalBus.video_quality_changed
         )
+        self.videoCodecCard.comboBox.currentTextChanged.connect(
+            signalBus.video_codec_changed
+        )
+        self.videoEncoderCard.comboBox.currentTextChanged.connect(
+            signalBus.video_encoder_changed
+        )
+        signalBus.video_codec_changed.connect(self._on_external_video_codec_changed)
+        signalBus.video_encoder_changed.connect(self._on_external_video_encoder_changed)
+
+    def _on_external_video_codec_changed(self, text: str):
+        if self.videoCodecCard.comboBox.currentText() != text:
+            self.videoCodecCard.comboBox.blockSignals(True)
+            self.videoCodecCard.comboBox.setCurrentText(text)
+            self.videoCodecCard.comboBox.blockSignals(False)
+
+    def _on_external_video_encoder_changed(self, text: str):
+        if self.videoEncoderCard.comboBox.currentText() != text:
+            self.videoEncoderCard.comboBox.blockSignals(True)
+            self.videoEncoderCard.comboBox.setCurrentText(text)
+            self.videoEncoderCard.comboBox.blockSignals(False)
 
     def __showRestartTooltip(self):
         """显示重启提示"""

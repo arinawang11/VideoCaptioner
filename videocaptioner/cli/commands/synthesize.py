@@ -173,6 +173,19 @@ def run(args: Namespace, config: dict) -> int:
 
     subtitle_mode = get(config, "synthesize.subtitle_mode", "soft")
     quality = get(config, "synthesize.quality", "medium")
+    video_codec_arg = getattr(args, "video_codec", None) or get(
+        config, "synthesize.video_codec", "h264"
+    )
+    video_encoder_arg = getattr(args, "video_encoder", None) or get(
+        config, "synthesize.video_encoder", "auto"
+    )
+    from videocaptioner.core.utils.video_encoder import (
+        coerce_video_codec,
+        coerce_video_encoder,
+    )
+
+    video_codec = coerce_video_codec(video_codec_arg)
+    video_encoder = coerce_video_encoder(video_encoder_arg)
     quiet = getattr(args, "quiet", False)
     verbose = getattr(args, "verbose", False)
 
@@ -251,6 +264,8 @@ def run(args: Namespace, config: dict) -> int:
                     crf=crf,
                     preset=preset,
                     progress_callback=progress_callback,
+                    video_codec=video_codec,
+                    video_encoder=video_encoder,
                 )
             else:
                 from videocaptioner.core.asr.asr_data import ASRData
@@ -270,6 +285,8 @@ def run(args: Namespace, config: dict) -> int:
                     crf=crf,
                     preset=preset,
                     progress_callback=progress_callback,
+                    video_codec=video_codec,
+                    video_encoder=video_encoder,
                 )
 
         if progress:

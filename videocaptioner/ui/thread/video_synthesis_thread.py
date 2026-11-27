@@ -82,7 +82,7 @@ class VideoSynthesisThread(QThread):
                     Path(temp_srt_path).unlink(missing_ok=True)
 
             else:
-                # 硬字幕：使用样式配置渲染
+                # 硬字幕：使用样式配置 + 编码格式/编码器渲染
                 add_subtitles_with_style(
                     video_path=video_file,
                     asr_data=asr_data,
@@ -94,6 +94,8 @@ class VideoSynthesisThread(QThread):
                     crf=crf,
                     preset=preset,
                     progress_callback=self.progress_callback,
+                    video_codec=config.video_codec,
+                    video_encoder=config.video_encoder,
                 )
 
             self.progress.emit(100, self.tr("合成完成"))
