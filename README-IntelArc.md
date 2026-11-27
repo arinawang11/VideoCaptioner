@@ -6,11 +6,11 @@ Whisper 语音转写（不依赖 NVIDIA CUDA，也不上传音频）。
 
 - 后端：Intel OpenVINO GenAI `WhisperPipeline`
 - 设备：Intel GPU（Arc 独显 / Core Ultra 核显）、Intel AI Boost NPU、Intel CPU
-- 模型：`large-v3-turbo`（内置 int8）及其它 Whisper 型号
+- 模型：`large-v3-turbo`（按需自动拉取）及其它 Whisper 型号
 - 架构：OpenVINO 跑在独立子进程，UI 进程不加载 OpenVINO
 
-> 归档状态：GPU / NPU / CPU 三条本地路径均已在本机实测通过，
-> 安装包已内置 OpenVINO 运行时与 `large-v3-turbo-int8` 模型。
+> 归档状态：GPU / NPU / CPU 三条本地路径均已在本机实测通过。
+> 自 v8 起安装包不再内置模型（仅内置 OpenVINO 运行时，约 245 MB），首次使用时按需自动拉取。
 
 ---
 
@@ -18,14 +18,14 @@ Whisper 语音转写（不依赖 NVIDIA CUDA，也不上传音频）。
 
 ### 使用安装包（推荐）
 
-运行 `VideoCaptioner-IntelArc-Setup-v6.exe`（Windows 10/11 x64，无需管理员权限）。
+运行 `VideoCaptioner-IntelArc-Setup-v8.exe`（Windows 10/11 x64，无需管理员权限）。
 
 安装后：设置 → 转录 → Faster Whisper：
 
 | 选项 | 说明 |
 | --- | --- |
 | 运行设备 | `intel_npu` / `intel_gpu` / `intel_cpu` / `cpu` |
-| 模型 | `large-v3-turbo`（已内置 int8，无需下载） |
+| 模型 | `large-v3-turbo`（首次转录自动拉取，支持断点续传与重试） |
 
 模型与配置放在 `%LOCALAPPDATA%\VideoCaptioner`，程序放在
 `%LOCALAPPDATA%\VideoCaptioner-IntelArc`。
@@ -183,12 +183,12 @@ build/portable/runtime/python.exe -m pip install --no-deps --force-reinstall dis
 # 2) 编译安装包（需 Inno Setup 6）
 ISCC.exe build/installer.iss
 
-# 3) 产物
-dist/VideoCaptioner-IntelArc-Setup-v6.exe
+# 3) 产物（不再封装模型，首次运行按需自动拉取）
+dist/VideoCaptioner-IntelArc-Setup-v8.exe
 ```
 
-v7 安装包：902.5 MB，SHA-256
-`697b41334c8f775a7d94459de1ed0e11ef5972a17db1f9555d499ef3f7811ecb`。
+v8 安装包：245.1 MB，SHA-256
+`a86db8c5e0b3eb45aae8aa8646f42fe3485e199d0044fa5b6780ef14ab3716d6`。
 
 ---
 

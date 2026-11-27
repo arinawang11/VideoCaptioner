@@ -13,8 +13,7 @@
 - 架构：OpenVINO 运行在独立子进程，UI 进程不加载 OpenVINO
 
 > 状态：**已完成**。GPU / NPU / CPU 三条路径均在
-> Core Ultra 7 155H 工程样品上实测通过，安装包内置运行时与
-> `large-v3-turbo-int8` 模型。
+> Core Ultra 7 155H 工程样品上实测通过；自 v8 起安装包仅内置运行时（~245 MB），模型按需自动拉取。
 
 ## 快速开始
 
@@ -32,8 +31,8 @@ videocaptioner-gui
 | `intel_cpu` | OpenVINO CPU + int8；稳定兜底 |
 | `cpu` / `cuda` | 上游原有路径，本分支不改行为 |
 
-模型选择 `large-v3-turbo`（已内置 int8，无需下载）。首次使用会自动下载
-对应精度的模型到 `%LOCALAPPDATA%\VideoCaptioner\models\openvino\`。
+模型推荐 `large-v3-turbo`。首次使用会自动按需下载
+对应精度的模型到 `%LOCALAPPDATA%\VideoCaptioner\models\openvino\`（支持断点续传与 3 次重试）。
 
 ## 已实现内容
 
@@ -100,6 +99,10 @@ python -c "import openvino as ov; c=ov.Core(); print(c.available_devices)"
 | v5 | iGPU 自动 f32，GPU 可用 |
 | **v6** | NPU 原生时间戳 + 解码上限，三条路径全部可用 |
 | **v7** | 合并社区 PR #1 / #2（下载自愈、词级时间戳回退），修正 fp16 完整性误判 |
+| **v8** | 合并社区 PR #3（4 项稳定性修复）；不再封装模型改为按需拉取，安装包降至 245.1 MB |
+
+v8：`VideoCaptioner-IntelArc-Setup-v8.exe`，245.1 MB，
+SHA-256 `a86db8c5e0b3eb45aae8aa8646f42fe3485e199d0044fa5b6780ef14ab3716d6`。
 
 v7：`VideoCaptioner-IntelArc-Setup-v7.exe`，902.5 MB，
 SHA-256 `697b41334c8f775a7d94459de1ed0e11ef5972a17db1f9555d499ef3f7811ecb`。
