@@ -405,3 +405,15 @@ def test_run_worker_kills_child_stuck_after_done(tmp_path):
 
     assert ok, detail
     assert elapsed < 15
+
+def test_npu_uses_shorter_chunks():
+    from videocaptioner.core.asr.openvino_asr import (
+        CHUNK_SECONDS,
+        NPU_CHUNK_SECONDS,
+        chunk_seconds_for_device,
+    )
+
+    assert NPU_CHUNK_SECONDS < CHUNK_SECONDS
+    assert chunk_seconds_for_device("NPU") == NPU_CHUNK_SECONDS
+    assert chunk_seconds_for_device("GPU.1") == CHUNK_SECONDS
+    assert chunk_seconds_for_device("CPU") == CHUNK_SECONDS

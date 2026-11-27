@@ -60,6 +60,14 @@ logger = setup_logger("openvino_asr")
 # Whisper internally works on 30s windows; on GPU/CPU we aggregate 4 minutes per
 # generate call to keep progress reporting responsive without excessive memory.
 CHUNK_SECONDS = 240
+# The Meteor Lake NPU wedges (ZE_RESULT_ERROR_DEVICE_LOST) on a first 240s call
+# with large models; 60s matches the previously stable short-clip runs.
+NPU_CHUNK_SECONDS = 60
+
+
+def chunk_seconds_for_device(device: str) -> int:
+    """Shorter generate calls on the NPU to avoid DEVICE_LOST on long audio."""
+    return NPU_CHUNK_SECONDS if _is_npu_device(device) else CHUNK_SECONDS
 
 # On NPU, encoder input is statically reshaped to a single 30s window and
 # return_timestamps=False is required (#4806), so utterances are capped at 14s.
@@ -725,7 +733,8 @@ class OpenVINOASR(BaseASR):
     ) -> List[ASRDataSeg]:
         """Standard GPU/CPU path with native timestamps (240s chunks)."""
         total_samples = len(audio)
-        chunk_samples = CHUNK_SECONDS * 16000
+        chunk_seconds = chunk_seconds_for_device(self.used_device)
+        chunk_samples = chunk_seconds * 16000
         chunk_count = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
         config = self._build_config()
 
