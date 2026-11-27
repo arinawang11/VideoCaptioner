@@ -12,7 +12,13 @@ try:
 except ImportError:
     GPUtil = None  # type: ignore[assignment]
 
+from ...config import MODEL_PATH
+from ..utils.hardware import resolve_faster_whisper_device
 from ..utils.logger import setup_logger
+from ..utils.model_downloader import (
+    ensure_faster_whisper_model,
+    faster_whisper_model_status,
+)
 from ..utils.subprocess_helper import StreamReader
 from .asr_data import ASRData, ASRDataSeg
 from .base import BaseASR
@@ -63,7 +69,14 @@ class FasterWhisperASR(BaseASR):
         self.faster_whisper_program = faster_whisper_program
         self.need_word_time_stamp = need_word_time_stamp
         self.language = language
-        self.device = device
+        # CTranslate2 only supports NVIDIA CUDA; fall back to CPU when cuda is
+        # requested on a machine without an NVIDIA GPU (e.g. Intel Arc).
+        self.requested_device = device
+        self.device = resolve_faster_whisper_device(device)
+        if self.device != device:
+            logger.warning(
+                "Device %s is unavailable (no NVIDIA CUDA), using CPU instead", device
+            )
         self.output_dir = output_dir
         self.output_format = output_format
 
@@ -224,6 +237,37 @@ class FasterWhisperASR(BaseASR):
 
         return filtered_segments
 
+    def _ensure_model(self, callback) -> None:
+        """Ensure the CTranslate2 model is complete before launching the binary.
+
+        The bundled executable tries to download from huggingface.co itself,
+        which fails on many networks (SSL certificate chain issues). Doing the
+        download here through the mirror avoids that failure mode.
+        """
+        model_name = str(self.model_path)
+        if (
+            "/" in model_name
+            or "\\" in model_name
+            or model_name.endswith(".bin")
+            or os.path.isabs(model_name)
+        ):
+            return
+
+        model_dir = Path(self.model_dir) if self.model_dir else Path(MODEL_PATH)
+        ready, reason = faster_whisper_model_status(model_dir, model_name)
+        if ready:
+            return
+
+        logger.info("Model %s is not usable (%s), downloading", model_name, reason)
+        callback(3, f"downloading model {model_name}")
+        ensure_faster_whisper_model(
+            model_name,
+            model_dir,
+            progress=lambda value, message: callback(
+                3 + int(value * 0.12), message
+            ),
+        )
+
     def _run(
         self, callback: Optional[Callable[[int, str], None]] = None, **kwargs: Any
     ) -> str:
@@ -232,6 +276,8 @@ class FasterWhisperASR(BaseASR):
 
         if callback is None:
             callback = _default_callback
+
+        self._ensure_model(callback)
 
         with tempfile.TemporaryDirectory() as temp_path:
             temp_dir = Path(temp_path)

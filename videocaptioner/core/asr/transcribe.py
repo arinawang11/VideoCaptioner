@@ -1,11 +1,16 @@
+from typing import Union
+
 from videocaptioner.core.asr.asr_data import ASRData
+from videocaptioner.core.asr.base import BaseASR
 from videocaptioner.core.asr.bcut import BcutASR
 from videocaptioner.core.asr.chunked_asr import ChunkedASR
 from videocaptioner.core.asr.faster_whisper import FasterWhisperASR
 from videocaptioner.core.asr.jianying import JianYingASR
+from videocaptioner.core.asr.openvino_process import OpenVINOProcessASR
 from videocaptioner.core.asr.whisper_api import WhisperAPI
 from videocaptioner.core.asr.whisper_cpp import WhisperCppASR
 from videocaptioner.core.entities import TranscribeConfig, TranscribeModelEnum
+from videocaptioner.core.utils.hardware import preferred_backend_device
 
 
 def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRData:
@@ -42,7 +47,9 @@ def transcribe(audio_path: str, config: TranscribeConfig, callback=None) -> ASRD
     return asr_data
 
 
-def _create_asr_instance(audio_path: str, config: TranscribeConfig) -> ChunkedASR:
+def _create_asr_instance(
+    audio_path: str, config: TranscribeConfig
+) -> Union[ChunkedASR, BaseASR]:
     """Create appropriate ASR instance based on configuration.
 
     Args:
@@ -126,8 +133,29 @@ def _create_whisper_api_asr(audio_path: str, config: TranscribeConfig) -> Chunke
     )
 
 
-def _create_faster_whisper_asr(audio_path: str, config: TranscribeConfig) -> ChunkedASR:
-    """Create FasterWhisper ASR instance with chunking support."""
+def _create_faster_whisper_asr(
+    audio_path: str, config: TranscribeConfig
+) -> Union[ChunkedASR, BaseASR]:
+    """Create FasterWhisper / OpenVINO ASR instance."""
+    device = (config.faster_whisper_device or "auto").strip()
+    if device.lower() in ("auto", ""):
+        device = preferred_backend_device()
+    if device.lower().startswith("intel"):
+        # Intel Arc (A/B series) / iGPU / NPU: OpenVINO GenAI, isolated worker
+        return OpenVINOProcessASR(
+            audio_path,
+            whisper_model=(
+                config.faster_whisper_model.value
+                if config.faster_whisper_model
+                else "large-v3-turbo"
+            ),
+            model_dir=config.faster_whisper_model_dir or "",
+            language=config.transcribe_language,
+            device=device,
+            use_cache=True,
+            need_word_time_stamp=config.need_word_time_stamp,
+        )
+
     asr_kwargs = {
         "use_cache": True,
         "need_word_time_stamp": config.need_word_time_stamp,

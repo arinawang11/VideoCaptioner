@@ -37,12 +37,18 @@ from videocaptioner.core.entities import (
     TranscribeLanguageEnum,
     VadMethodEnum,
 )
+from videocaptioner.core.utils.hardware import describe_hardware
+from videocaptioner.core.utils.model_downloader import (
+    FASTER_WHISPER_REPOS,
+    faster_whisper_model_dir,
+    faster_whisper_model_status,
+)
 from videocaptioner.core.utils.platform_utils import open_folder
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.components.LineEditSettingCard import LineEditSettingCard
 from videocaptioner.ui.components.SpinBoxSettingCard import DoubleSpinBoxSettingCard
 from videocaptioner.ui.thread.file_download_thread import FileDownloadThread
-from videocaptioner.ui.thread.modelscope_download_thread import ModelscopeDownloadThread
+from videocaptioner.ui.thread.hf_model_download_thread import HfModelDownloadThread
 
 # 在文件开头添加常量定义
 FASTER_WHISPER_PROGRAMS = [
@@ -282,6 +288,16 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         layout.addLayout(title_layout)
         layout.addSpacing(8)
 
+        hint = BodyLabel(
+            self.tr(
+                "提示：Intel Arc（A 系列 / B 系列）用户请把“运行设备”设为 intel_gpu，"
+                "OpenVINO 模型会在首次转录时自动下载（约 1.6GB）。"
+            ),
+            self,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
         # 模型表格
         self.model_table = self._create_model_table()
         self._populate_model_table()
@@ -353,16 +369,21 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         size_item.setTextAlignment(Qt.AlignCenter)  # type: ignore
         self.model_table.setItem(row, 1, size_item)
 
-        # 状态 - 检查model.bin文件是否存在
-        model_path = os.path.join(MODEL_PATH, model["value"])
-        model_bin_path = os.path.join(model_path, "model.bin")
-        is_downloaded = os.path.exists(model_bin_path)
+        # 状态 - 校验 model.bin 的大小，避免把损坏的下载显示成“已下载”
+        model_name = model["value"].replace("faster-whisper-", "")
+        is_downloaded, status_reason = faster_whisper_model_status(MODEL_PATH, model_name)
+        if is_downloaded:
+            status_text = self.tr("已下载")
+        elif status_reason and "unexpected size" in status_reason:
+            status_text = self.tr("文件损坏")
+        else:
+            status_text = self.tr("未下载")
 
-        status_item = QTableWidgetItem(
-            self.tr("已下载") if is_downloaded else self.tr("未下载")
-        )
+        status_item = QTableWidgetItem(status_text)
         if is_downloaded:
             status_item.setForeground(Qt.green)  # type: ignore
+        elif status_text == self.tr("文件损坏"):
+            status_item.setForeground(Qt.red)  # type: ignore
         status_item.setTextAlignment(Qt.AlignCenter)  # type: ignore
         self.model_table.setItem(row, 2, status_item)
 
@@ -525,9 +546,13 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         if download_btn:
             download_btn.setEnabled(False)
 
-        # 创建并启动下载线程，保存到类属性
-        self.model_download_thread = ModelscopeDownloadThread(
-            model["modelScopeLink"], os.path.join(MODEL_PATH, model["value"])
+        # 创建并启动下载线程（hf-mirror + aria2c，下载后校验大小）
+        model_name = model["value"].replace("faster-whisper-", "")
+        repo_id = FASTER_WHISPER_REPOS.get(model_name, ("", 0))[0]
+        self.model_download_thread = HfModelDownloadThread(
+            repo_id,
+            faster_whisper_model_dir(MODEL_PATH, model_name),
+            label=f"Faster-Whisper {model_name}",
         )
 
         def _on_model_download_progress(value, msg):
@@ -552,33 +577,10 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
             # 更新主设置对话框的模型选择
             if self.setting_widget:
-                # 保存当前值并清空
-                current_value = cfg.faster_whisper_model.value
-                combo = self.setting_widget.model_card.comboBox
-                combo.clear()
-
-                # 找出已下载的模型
-                available = []
-                model_map = {
-                    m["label"].lower(): m["value"] for m in FASTER_WHISPER_MODELS
-                }
-                for enum_val in FasterWhisperModelEnum:
-                    if enum_val.value in model_map:
-                        if (MODEL_PATH / model_map[enum_val.value]).exists():
-                            available.append(enum_val)
-
-                # 重建下拉框
-                self.setting_widget.model_card.optionToText = {
-                    e: e.value for e in available
-                }
-                for enum_val in available:
-                    combo.addItem(enum_val.value, userData=enum_val)
-
-                # 恢复选择
-                if current_value in available:
-                    combo.setCurrentText(current_value.value)
-                elif combo.count() > 0:
-                    combo.setCurrentIndex(0)
+                try:
+                    self.setting_widget._refresh_model_combo()
+                except Exception:
+                    pass
 
             InfoBar.success(
                 self.tr("下载成功"),
@@ -698,22 +700,8 @@ class FasterWhisperSettingWidget(QWidget):
         )
 
         # 检查未下载的模型并从下拉框中移除
-        for i in range(self.model_card.comboBox.count() - 1, -1, -1):
-            model_text = self.model_card.comboBox.itemText(i).lower()
-            model_config = next(
-                (
-                    model
-                    for model in FASTER_WHISPER_MODELS
-                    if model["label"].lower() == model_text
-                ),
-                None,
-            )
-            if model_config:
-                model_path = Path(MODEL_PATH) / model_config["value"]
-                model_bin_path = model_path / "model.bin"
-                if model_bin_path.exists():
-                    continue
-            self.model_card.comboBox.removeItem(i)
+        # （Intel 设备使用 OpenVINO，首次转录时自动下载模型）
+        self._refresh_model_combo()
 
         # 创建管理模型卡片
         self.manage_model_card = HyperlinkCard(
@@ -741,9 +729,16 @@ class FasterWhisperSettingWidget(QWidget):
             cfg.faster_whisper_device,
             FIF.IOT,
             self.tr("运行设备"),
-            self.tr("模型运行设备"),
-            ["cuda", "cpu"],
+            self.tr(
+                "cuda: NVIDIA 显卡；intel_gpu: Intel Arc（A/B 系列）/核显（OpenVINO）；"
+                "intel_npu: Intel NPU（OpenVINO）；cpu: 处理器\n"
+                f"检测结果：{describe_hardware()}"
+            ),
+            ["cuda", "cpu", "intel_gpu", "intel_npu"],
             self.setting_group,
+        )
+        self.device_card.comboBox.currentTextChanged.connect(
+            lambda _text: self._refresh_model_combo()
         )
         # _, available_devices = check_faster_whisper_exists()
         # if "GPU" not in available_devices:
@@ -850,6 +845,46 @@ class FasterWhisperSettingWidget(QWidget):
         # 将滚动区域添加到主布局
         self.main_layout.addWidget(self.scrollArea)
 
+    def _is_intel_device(self) -> bool:
+        return str(cfg.faster_whisper_device.value).lower().startswith("intel")
+
+    def _refresh_model_combo(self):
+        """根据运行设备刷新可选模型列表"""
+        combo = self.model_card.comboBox
+        current = combo.currentData()
+        if not isinstance(current, FasterWhisperModelEnum):
+            try:
+                current = FasterWhisperModelEnum(combo.currentText())
+            except Exception:
+                current = None
+
+        combo.blockSignals(True)
+        combo.clear()
+
+        if self._is_intel_device():
+            # OpenVINO 模型首次使用时自动下载
+            available = list(FasterWhisperModelEnum)
+        else:
+            available = [
+                model
+                for model in FasterWhisperModelEnum
+                if faster_whisper_model_status(MODEL_PATH, model.value)[0]
+            ]
+            if not available:
+                available = list(FasterWhisperModelEnum)
+
+        self.model_card.optionToText = {model: model.value for model in available}
+        for model in available:
+            combo.addItem(model.value, userData=model)
+
+        combo.setCurrentIndex(available.index(current) if current in available else 0)
+        combo.blockSignals(False)
+
+        try:
+            cfg.set(cfg.faster_whisper_model, available[combo.currentIndex()])
+        except Exception:
+            pass
+
     def _connect_signals(self):
         """连接信号"""
         self.manage_model_card.linkButton.clicked.connect(self._show_model_manager)
@@ -888,6 +923,11 @@ class FasterWhisperSettingWidget(QWidget):
             return False
 
         model_value = cfg.faster_whisper_model.value.value
+
+        # Intel 设备使用 OpenVINO，模型首次使用时自动下载
+        if self._is_intel_device():
+            return True
+
         # 检查模型配置是否存在
         model_config = next(
             (
@@ -901,10 +941,8 @@ class FasterWhisperSettingWidget(QWidget):
             self.show_error_info(self.tr("模型配置不存在"))
             return False
 
-        model_path = MODEL_PATH / model_config["value"]
-        model_files = model_path / "model.bin"
-        # 检查模型文件是否存在
-        if not model_path.exists() and not model_files.exists():
-            self.show_error_info(self.tr("模型文件不存在: ") + model_value)
+        ready, reason = faster_whisper_model_status(MODEL_PATH, model_value)
+        if not ready:
+            self.show_error_info(self.tr("模型不可用: ") + model_value + " " + reason)
             return False
         return True

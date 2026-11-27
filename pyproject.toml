@@ -43,6 +43,13 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = []
+# Intel Arc (A-series Alchemist / B-series Battlemage), iGPU and NPU support.
+# Pinned to the versions tested together; OpenVINO GenAI and tokenizers must match.
+intel = [
+    "openvino==2026.4.1",
+    "openvino-tokenizers==2026.4.1.0",
+    "openvino-genai==2026.4.1.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/WEIFENG2333/VideoCaptioner"

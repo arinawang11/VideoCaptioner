@@ -11,6 +11,11 @@
 | **Whisper API** | 云端服务 | 无需本地模型 |
 | **B接口/J接口** | 免费在线 | 快速测试 |
 
+## Intel Arc 显卡（OpenVINO）
+
+Intel Arc（A 系列 / B 系列）、核显或 NPU 请把运行设备设为 `intel_gpu` 或 `intel_npu`，
+详见 [Intel Arc GPU 本地转录](/config/intel-arc-gpu)。
+
 ## 模型下载
 
 待补充...

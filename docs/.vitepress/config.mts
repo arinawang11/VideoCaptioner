@@ -277,6 +277,7 @@ export default defineConfig({
               items: [
                 { text: 'LLM 配置', link: '/config/llm' },
                 { text: '语音识别配置', link: '/config/asr' },
+                { text: 'Intel Arc GPU 转录', link: '/config/intel-arc-gpu' },
                 { text: '翻译配置', link: '/config/translator' },
                 { text: 'Cookie 配置', link: '/config/cookies' }
               ]
