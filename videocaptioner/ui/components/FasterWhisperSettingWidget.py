@@ -290,8 +290,9 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
         hint = BodyLabel(
             self.tr(
-                "提示：Intel Arc（A 系列 / B 系列）用户请把“运行设备”设为 intel_gpu，"
-                "OpenVINO 模型会在首次转录时自动下载（约 1.6GB）。"
+                "提示：Intel GPU 用户请把“运行设备”设为 intel_gpu；"
+                "Intel AI Boost NPU（如酷睿 Ultra 7 155H）设为 intel_npu。"
+                "OpenVINO 模型会在首次转录时自动下载（NPU 设备自动使用 INT8 模型）。"
             ),
             self,
         )
@@ -665,6 +666,9 @@ class FasterWhisperSettingWidget(QWidget):
 
     def showEvent(self, a0: QShowEvent) -> None:
         super().showEvent(a0)
+        # Intel GPU/NPU 使用 OpenVINO，无需 Faster-Whisper-XXL 程序
+        if self._is_intel_device():
+            return
         # 检查Faster Whisper模型是否存在
         is_faster_whisper_exists, _ = check_faster_whisper_exists()
         if not is_faster_whisper_exists:
@@ -730,8 +734,8 @@ class FasterWhisperSettingWidget(QWidget):
             FIF.IOT,
             self.tr("运行设备"),
             self.tr(
-                "cuda: NVIDIA 显卡；intel_gpu: Intel Arc（A/B 系列）/核显（OpenVINO）；"
-                "intel_npu: Intel NPU（OpenVINO）；cpu: 处理器\n"
+                "cuda: NVIDIA 显卡；intel_gpu: Intel Arc（A/B 系列）/核显；"
+                "intel_npu: Intel AI Boost NPU（酷睿 Ultra，如 155H）；cpu: 处理器\n"
                 f"检测结果：{describe_hardware()}"
             ),
             ["cuda", "cpu", "intel_gpu", "intel_npu"],
@@ -916,11 +920,12 @@ class FasterWhisperSettingWidget(QWidget):
         Returns:
             bool: 如果模型存在且配置正确返回True，否则返回False
         """
-        # 检查程序是否存在
-        has_program, _ = check_faster_whisper_exists()
-        if not has_program:
-            self.show_error_info(self.tr("Faster Whisper程序不存在，请先下载程序"))
-            return False
+        # 检查程序是否存在（Intel 设备使用 OpenVINO，无需 Faster-Whisper-XXL）
+        if not self._is_intel_device():
+            has_program, _ = check_faster_whisper_exists()
+            if not has_program:
+                self.show_error_info(self.tr("Faster Whisper程序不存在，请先下载程序"))
+                return False
 
         model_value = cfg.faster_whisper_model.value.value
 

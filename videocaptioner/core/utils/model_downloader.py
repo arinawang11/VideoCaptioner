@@ -45,7 +45,7 @@ FASTER_WHISPER_REPOS: Dict[str, Tuple[str, int]] = {
     "large-v3-turbo": ("deepdml/faster-whisper-large-v3-turbo-ct2", 1617884929),
 }
 
-# Pre-converted OpenVINO IR models, runnable on Intel Arc (A/B series), iGPU and NPU.
+# Pre-converted OpenVINO FP16 IR models (recommended for Intel Arc dGPU / iGPU).
 OPENVINO_WHISPER_REPOS: Dict[str, str] = {
     "tiny": "OpenVINO/whisper-tiny-fp16-ov",
     "base": "OpenVINO/whisper-base-fp16-ov",
@@ -56,6 +56,20 @@ OPENVINO_WHISPER_REPOS: Dict[str, str] = {
     "large-v2": "OpenVINO/whisper-large-v2-fp16-ov",
     "large-v3": "OpenVINO/whisper-large-v3-fp16-ov",
     "large-v3-turbo": "OpenVINO/whisper-large-v3-turbo-fp16-ov",
+}
+
+# Pre-converted OpenVINO INT8 IR models (recommended for Intel AI Boost NPU,
+# such as Core Ultra 7 155H Meteor Lake NPU 3720: ~50% smaller footprint and
+# native INT8 execution on the NPU MAC array).
+OPENVINO_WHISPER_INT8_REPOS: Dict[str, str] = {
+    "tiny": "OpenVINO/whisper-tiny-int8-ov",
+    "base": "OpenVINO/whisper-base-int8-ov",
+    "small": "OpenVINO/whisper-small-int8-ov",
+    "medium": "OpenVINO/whisper-medium-int8-ov",
+    "large-v1": "OpenVINO/whisper-large-v2-int8-ov",
+    "large-v2": "OpenVINO/whisper-large-v2-int8-ov",
+    "large-v3": "OpenVINO/whisper-large-v3-int8-ov",
+    "large-v3-turbo": "OpenVINO/whisper-large-v3-turbo-int8-ov",
 }
 
 _IGNORED_FILES = {".gitattributes", ".gitignore", "README.md", ".msc"}
@@ -485,25 +499,39 @@ def ensure_faster_whisper_model(
     return download_hf_model(repo, model_path, progress, label=f"Faster-Whisper {model_name}")
 
 
-def openvino_whisper_model_dir(model_dir: Path, model_name: str) -> Path:
-    repo = OPENVINO_WHISPER_REPOS.get(model_name)
+def _select_openvino_repo(model_name: str, precision: str = "fp16") -> str:
+    table = (
+        OPENVINO_WHISPER_INT8_REPOS
+        if (precision or "").lower() == "int8"
+        else OPENVINO_WHISPER_REPOS
+    )
+    repo = table.get(model_name)
     if not repo:
         raise RuntimeError(f"Unknown OpenVINO Whisper model: {model_name}")
+    return repo
+
+
+def openvino_whisper_model_dir(
+    model_dir: Path, model_name: str, precision: str = "fp16"
+) -> Path:
+    repo = _select_openvino_repo(model_name, precision)
     return Path(model_dir) / "openvino" / repo.split("/")[-1]
 
 
 def ensure_openvino_whisper_model(
-    model_name: str, model_dir: Path, progress: ProgressCallback = None
+    model_name: str,
+    model_dir: Path,
+    progress: ProgressCallback = None,
+    precision: str = "fp16",
 ) -> Path:
     """Make sure a pre-converted OpenVINO Whisper model is available."""
-    repo = OPENVINO_WHISPER_REPOS.get(model_name)
-    if not repo:
-        raise RuntimeError(f"Unknown OpenVINO Whisper model: {model_name}")
-    model_path = openvino_whisper_model_dir(model_dir, model_name)
+    repo = _select_openvino_repo(model_name, precision)
+    model_path = openvino_whisper_model_dir(model_dir, model_name, precision=precision)
     required = model_path / "openvino_encoder_model.xml"
     decoder = model_path / "openvino_decoder_model.xml"
+    tag = f"{model_name} ({precision})" if precision != "fp16" else model_name
     if required.exists() and decoder.exists():
         if progress:
-            progress(100, f"OpenVINO model {model_name} is ready")
+            progress(100, f"OpenVINO model {tag} is ready")
         return model_path
-    return download_hf_model(repo, model_path, progress, label=f"OpenVINO {model_name}")
+    return download_hf_model(repo, model_path, progress, label=f"OpenVINO {tag}")

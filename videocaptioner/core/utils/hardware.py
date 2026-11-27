@@ -88,6 +88,84 @@ def is_intel_arc_b_series(name: str) -> bool:
     return bool(re.search(r"arc.*\bb\d{2,3}\b", (name or "").lower()))
 
 
+# Known Intel AI Boost NPU PCI device IDs (VEN_8086) across Core Ultra generations:
+# - 7D1D: Core Ultra Series 1 (Meteor Lake, e.g. Core Ultra 7 155H, NPU 3720)
+# - AD1D: Core Ultra Series 2 (Arrow Lake-H/S, NPU 3720)
+# - 643E: Core Ultra 200V (Lunar Lake, NPU 4000)
+# - B03E: Core Ultra Series 3 (Panther Lake)
+INTEL_NPU_PCI_DEVICES = {
+    "7D1D": "Intel(R) AI Boost (Meteor Lake NPU)",
+    "AD1D": "Intel(R) AI Boost (Arrow Lake NPU)",
+    "643E": "Intel(R) AI Boost (Lunar Lake NPU)",
+    "B03E": "Intel(R) AI Boost (Panther Lake NPU)",
+}
+
+
+def intel_npu_adapters() -> List[str]:
+    """Detect active Intel AI Boost NPU devices without importing OpenVINO."""
+    names: List[str] = []
+    if os.name == "nt":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Enum\PCI"
+            ) as pci:
+                subkey_count = winreg.QueryInfoKey(pci)[0]
+                for i in range(subkey_count):
+                    dev_key_name = winreg.EnumKey(pci, i)
+                    upper_name = dev_key_name.upper()
+                    if "VEN_8086" not in upper_name:
+                        continue
+                    matched_pci_label = ""
+                    for dev_id, label in INTEL_NPU_PCI_DEVICES.items():
+                        if f"DEV_{dev_id}" in upper_name:
+                            matched_pci_label = label
+                            break
+                    with winreg.OpenKey(pci, dev_key_name) as dev_key:
+                        inst_count = winreg.QueryInfoKey(dev_key)[0]
+                        for j in range(inst_count):
+                            inst_name = winreg.EnumKey(dev_key, j)
+                            with winreg.OpenKey(dev_key, inst_name) as inst:
+                                # Volatile 'Control' subkey exists iff device is currently present
+                                try:
+                                    winreg.OpenKey(inst, "Control").Close()
+                                except OSError:
+                                    continue
+                                desc = ""
+                                for value_name in ("FriendlyName", "DeviceDesc"):
+                                    try:
+                                        raw_val, _ = winreg.QueryValueEx(inst, value_name)
+                                        if raw_val:
+                                            desc = str(raw_val).split(";")[-1].strip()
+                                            break
+                                    except OSError:
+                                        continue
+                                lowered = desc.lower()
+                                if matched_pci_label or any(
+                                    kw in lowered for kw in ("ai boost", "npu")
+                                ):
+                                    names.append(desc or matched_pci_label)
+        except Exception:
+            pass
+    else:
+        # Linux intel_vpu exposes /sys/class/accel/accel*
+        try:
+            from pathlib import Path
+
+            accel_root = Path("/sys/class/accel")
+            if accel_root.is_dir():
+                for entry in sorted(accel_root.iterdir()):
+                    vendor_file = entry / "device" / "vendor"
+                    if vendor_file.exists():
+                        vendor = vendor_file.read_text(encoding="utf-8", errors="ignore").strip()
+                        if vendor.lower() == "0x8086":
+                            names.append(f"Intel(R) AI Boost ({entry.name})")
+        except Exception:
+            pass
+    return list(dict.fromkeys(names))
+
+
 def has_nvidia_gpu() -> bool:
     if any("nvidia" in name.lower() for name in display_adapters()):
         return True
@@ -98,6 +176,10 @@ def has_nvidia_gpu() -> bool:
 
 def has_intel_gpu() -> bool:
     return bool(intel_gpu_adapters())
+
+
+def has_intel_npu() -> bool:
+    return bool(intel_npu_adapters())
 
 
 def openvino_packages_available() -> bool:
@@ -114,22 +196,34 @@ def openvino_packages_available() -> bool:
 
 
 def preferred_backend_device() -> str:
-    """Pick a sensible default for the ``auto`` device option."""
+    """Pick a sensible default for the ``auto`` device option.
+
+    On Core Ultra laptops (e.g. 155H), the built-in Arc iGPU has ~3x higher
+    Whisper throughput than the 11 TOPS NPU and supports native timestamps, so
+    ``intel_gpu`` is preferred when present; ``intel_npu`` is used when only an
+    NPU is available (or when explicitly selected by the user for low power).
+    """
     if has_nvidia_gpu():
         return "cuda"
-    if has_intel_gpu() and openvino_packages_available():
-        return "intel_gpu"
+    if openvino_packages_available():
+        if has_intel_gpu():
+            return "intel_gpu"
+        if has_intel_npu():
+            return "intel_npu"
     return "cpu"
 
 
 def describe_hardware() -> str:
     """Human readable hardware summary for the settings page (no OpenVINO)."""
     adapters = display_adapters()
+    npus = intel_npu_adapters()
     parts: List[str] = []
     intel = [name for name in adapters if "intel" in name.lower()]
     nvidia = [name for name in adapters if "nvidia" in name.lower()]
     if intel:
         parts.append("Intel GPU: " + " / ".join(intel))
+    if npus:
+        parts.append("Intel NPU: " + " / ".join(npus))
     if nvidia:
         parts.append("NVIDIA GPU: " + " / ".join(nvidia))
     if not parts:
@@ -176,8 +270,12 @@ def intel_gpu_devices() -> List[Tuple[str, str]]:
     return [(device, name) for device, name in list_openvino_devices() if device.startswith("GPU")]
 
 
+def intel_npu_devices() -> List[Tuple[str, str]]:
+    return [(device, name) for device, name in list_openvino_devices() if device.startswith("NPU")]
+
+
 def intel_npu_available() -> bool:
-    return any(device.startswith("NPU") for device, _ in list_openvino_devices())
+    return bool(intel_npu_devices())
 
 
 def resolve_openvino_device(preference: str) -> str:
@@ -189,9 +287,17 @@ def resolve_openvino_device(preference: str) -> str:
     preference = (preference or "").lower()
 
     if preference.startswith("intel_npu") or preference.startswith("npu"):
-        if intel_npu_available():
-            return "NPU"
-        return resolve_openvino_device("intel_gpu")
+        npus = intel_npu_devices()
+        if npus:
+            return npus[0][0]
+        gpus = intel_gpu_devices()
+        if gpus:
+            arc = [(device, name) for device, name in gpus if is_intel_arc(name)]
+            return (arc or gpus)[0][0]
+        raise RuntimeError(
+            "No Intel NPU (AI Boost) detected by OpenVINO. Please install the "
+            "Intel NPU driver (>= 32.0.100.3104 on Windows)."
+        )
 
     if preference.startswith("intel_gpu") or preference.startswith("gpu"):
         gpus = intel_gpu_devices()
