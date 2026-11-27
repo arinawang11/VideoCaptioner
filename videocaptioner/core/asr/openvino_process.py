@@ -60,6 +60,7 @@ class OpenVINOProcessASR(BaseASR):
         model_dir: Optional[str] = None,
         language: str = "en",
         device: str = "intel_gpu",
+        precision: str = "",
         use_cache: bool = False,
         need_word_time_stamp: bool = False,
     ):
@@ -68,6 +69,7 @@ class OpenVINOProcessASR(BaseASR):
         self.model_dir = Path(model_dir) if model_dir else Path(MODEL_PATH)
         self.language = language
         self.device = device
+        self.precision = (precision or "").strip().lower()
         self.need_word_time_stamp = need_word_time_stamp
         self.active_device_label = ""
 
@@ -189,14 +191,15 @@ class OpenVINOProcessASR(BaseASR):
         temp_dir = Path(tempfile.gettempdir()) / "videocaptioner_asr"
         temp_dir.mkdir(parents=True, exist_ok=True)
 
+        primary_precision = self.precision or None
         attempts: List[Tuple[str, Optional[str], Optional[str]]] = [
-            (self.device, None, None)
+            (self.device, primary_precision, None)
         ]
         device_lower = str(self.device).lower()
         if device_lower.startswith(("intel_gpu", "gpu")):
             # IGC may abort natively while compiling fp16 kernels on some
             # integrated GPUs; f32 kernels are stable there.
-            attempts.append((self.device, None, "f32"))
+            attempts.append((self.device, primary_precision, "f32"))
             attempts.append(("cpu", "int8", None))
         elif device_lower.startswith(("intel_npu", "npu")):
             attempts.append(("cpu", "int8", None))
@@ -257,7 +260,8 @@ class OpenVINOProcessASR(BaseASR):
         return filtered
 
     def _get_key(self):
+        prec_tag = f"-{self.precision}" if self.precision else ""
         return (
             f"{self.crc32_hex}-openvino-process-{self.model_name}-{self.device}"
-            f"-{self.language}-{int(self.need_word_time_stamp)}"
+            f"{prec_tag}-{self.language}-{int(self.need_word_time_stamp)}"
         )

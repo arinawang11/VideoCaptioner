@@ -199,3 +199,14 @@ def test_format_runtime_device_includes_device_name_and_precision():
         == "NPU · Intel(R) AI Boost (int8)"
     )
     assert _format_runtime_device("CPU", "", "int8", "") == "CPU (int8)"
+
+
+def test_openvino_model_precision_enum_two_items():
+    from videocaptioner.core.entities import OpenVINOModelPrecisionEnum
+
+    items = list(OpenVINOModelPrecisionEnum)
+    assert len(items) == 2
+    assert OpenVINOModelPrecisionEnum.INT8.precision_key == "int8"
+    assert OpenVINOModelPrecisionEnum.FP16.precision_key == "fp16"
+    assert "INT8" in OpenVINOModelPrecisionEnum.INT8.value
+    assert "FP16" in OpenVINOModelPrecisionEnum.FP16.value

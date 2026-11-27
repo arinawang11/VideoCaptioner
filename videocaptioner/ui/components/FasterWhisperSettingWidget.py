@@ -35,6 +35,7 @@ from qfluentwidgets import FluentIcon as FIF
 from videocaptioner.config import BIN_PATH, MODEL_PATH
 from videocaptioner.core.entities import (
     FasterWhisperModelEnum,
+    OpenVINOModelPrecisionEnum,
     TranscribeLanguageEnum,
     VadMethodEnum,
 )
@@ -132,6 +133,18 @@ FASTER_WHISPER_MODELS = [
     },
 ]
 
+# OpenVINO 模型在 INT8 与 FP16 下的近似体积（MB），用于模型选择与管理界面展示
+OPENVINO_MODEL_SIZES_MB = {
+    "tiny": (46, 75),
+    "base": (81, 145),
+    "small": (245, 485),
+    "medium": (748, 1520),
+    "large-v1": (1500, 3050),
+    "large-v2": (1500, 3050),
+    "large-v3": (1500, 3050),
+    "large-v3-turbo": (790, 1550),
+}
+
 
 # 在类外添加这个工具函数
 def check_faster_whisper_exists() -> tuple[bool, list[str]]:
@@ -196,10 +209,11 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
     def __init__(self, parent=None, setting_widget=None):
         super().__init__(parent)
-        self.widget.setMinimumWidth(620)
+        self.widget.setMinimumWidth(650)
         self.program_download_thread = None
         self.model_download_thread = None
         self.setting_widget = setting_widget
+        self._selected_ov_precision = self._default_ov_precision()
         self._setup_ui()
         self._connect_signals()
 
@@ -210,11 +224,17 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
     def _is_intel_mode(self) -> bool:
         return self._current_device().startswith("intel")
 
+    def _default_ov_precision(self) -> OpenVINOModelPrecisionEnum:
+        if self._current_device().startswith("intel_npu"):
+            return OpenVINOModelPrecisionEnum.INT8
+        return cfg.faster_whisper_precision.value
+
     def _openvino_precision_for_device(self) -> str:
-        dev = self._current_device()
-        if dev.startswith(("intel_npu", "intel_cpu")):
+        if self._is_intel_mode() and hasattr(self, "_selected_ov_precision"):
+            return self._selected_ov_precision.precision_key
+        if self._current_device().startswith("intel_npu"):
             return "int8"
-        return "fp16"
+        return cfg.faster_whisper_precision.value.precision_key
 
     def _setup_ui(self):
         """设置UI"""
@@ -313,10 +333,30 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         layout.addSpacing(8)
 
         if self._is_intel_mode():
-            precision = self._openvino_precision_for_device()
+            prec_layout = QHBoxLayout()
+            prec_label = BodyLabel(self.tr("下载精度版本："), self)
+            self.ov_precision_combo = ComboBox(self)
+            self.ov_precision_combo.setMinimumWidth(300)
+            for item in OpenVINOModelPrecisionEnum:
+                self.ov_precision_combo.addItem(item.value, userData=item)
+            self.ov_precision_combo.setCurrentText(self._selected_ov_precision.value)
+            if self._current_device().startswith("intel_npu"):
+                self.ov_precision_combo.setEnabled(False)
+                self.ov_precision_combo.setToolTip(
+                    self.tr("Intel NPU 仅支持 INT8 量化模型")
+                )
+            self.ov_precision_combo.currentIndexChanged.connect(
+                self._on_dialog_precision_changed
+            )
+            prec_layout.addWidget(prec_label)
+            prec_layout.addWidget(self.ov_precision_combo)
+            prec_layout.addStretch()
+            layout.addLayout(prec_layout)
+            layout.addSpacing(4)
+
             hint_text = self.tr(
-                f"当前运行设备：{self._current_device()}（OpenVINO，默认 {precision} 模型）。"
-                "可在此提前下载，或在首次转录时由程序自动按需拉取。"
+                "• INT8（8位整数量化）：体积与内存减半，下载快、推理省电，准确率几乎无损，NPU 必选 / 核显与 CPU 推荐。\n"
+                "• FP16（16位半精度）：保留完整浮点权重，体积约 2 倍，适合大显存独立显卡（如 Arc A770 / B580 / Pro B50）。"
             )
         else:
             hint_text = self.tr(
@@ -382,6 +422,20 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.progress_label)
 
+    def _on_dialog_precision_changed(self, index: int):
+        if FasterWhisperDownloadDialog.is_downloading:
+            return
+        enum_val = self.ov_precision_combo.itemData(index)
+        if isinstance(enum_val, OpenVINOModelPrecisionEnum):
+            self._selected_ov_precision = enum_val
+            cfg.set(cfg.faster_whisper_precision, enum_val)
+            if self.setting_widget:
+                try:
+                    self.setting_widget._sync_precision_from_config()
+                except Exception:
+                    pass
+            self._populate_model_table()
+
     def _populate_model_table(self):
         """填充模型表格数据"""
         self.model_table.setRowCount(len(FASTER_WHISPER_MODELS))
@@ -390,32 +444,36 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
     def _add_model_row(self, row, model):
         """添加模型表格行"""
-        # 模型名称
-        name_item = QTableWidgetItem(model["label"])
+        model_name = model["value"].replace("faster-whisper-", "")
+
+        # 模型名称 + 大小
+        if self._is_intel_mode():
+            precision = self._openvino_precision_for_device()
+            int8_mb, fp16_mb = OPENVINO_MODEL_SIZES_MB.get(model_name, (0, 0))
+            shown_mb = int8_mb if precision == "int8" else fp16_mb
+            display_label = f"{model['label']} ({precision.upper()})"
+            size_str = f"~{shown_mb} MB" if shown_mb else f"{int(model['size']) / 1024:.1f} MB"
+        else:
+            display_label = model["label"]
+            size_str = f"{int(model['size']) / 1024:.1f} MB"
+
+        name_item = QTableWidgetItem(display_label)
         name_item.setTextAlignment(Qt.AlignCenter)  # type: ignore
         self.model_table.setItem(row, 0, name_item)
 
-        # 大小
-        size_item = QTableWidgetItem(f"{int(model['size']) / 1024:.1f} MB")
+        size_item = QTableWidgetItem(size_str)
         size_item.setTextAlignment(Qt.AlignCenter)  # type: ignore
         self.model_table.setItem(row, 1, size_item)
 
         # 状态
-        model_name = model["value"].replace("faster-whisper-", "")
         if self._is_intel_mode():
             precision = self._openvino_precision_for_device()
             target_dir = openvino_whisper_model_dir(
                 MODEL_PATH, model_name, precision=precision
             )
-            int8_dir = openvino_whisper_model_dir(
-                MODEL_PATH, model_name, precision="int8"
-            )
             if openvino_model_files_complete(target_dir):
                 is_downloaded = True
                 status_text = self.tr("已下载")
-            elif precision == "fp16" and openvino_model_files_complete(int8_dir):
-                is_downloaded = True
-                status_text = self.tr("已下载(int8)")
             elif target_dir.exists() and any(target_dir.iterdir()):
                 is_downloaded = False
                 status_text = self.tr("不完整")
@@ -683,6 +741,10 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         if hasattr(self, "program_download_btn"):
             self.program_download_btn.setEnabled(enabled)
             self.program_combo.setEnabled(enabled)
+        if hasattr(self, "ov_precision_combo") and not self._current_device().startswith(
+            "intel_npu"
+        ):
+            self.ov_precision_combo.setEnabled(enabled)
 
         # 设置所有模型下载按钮
         for row in range(self.model_table.rowCount()):
@@ -766,9 +828,27 @@ class FasterWhisperSettingWidget(QWidget):
             cfg.faster_whisper_model,
             FIF.ROBOT,
             self.tr("模型"),
-            self.tr("选择 Faster Whisper 模型"),
+            self.tr("选择 Faster Whisper / OpenVINO 语音识别模型"),
             [model.value for model in FasterWhisperModelEnum],
             self.setting_group,
+        )
+        self._make_card_wrappable(self.model_card, min_height=76)
+        self.model_card.comboBox.currentIndexChanged.connect(
+            lambda _idx: self._update_precision_card_description()
+        )
+
+        # 模型精度选择（INT8 / FP16 两个选项，标注体积与适用硬件区别）
+        self.precision_card = ComboBoxSettingCard(
+            cfg.faster_whisper_precision,
+            FIF.SPEED_HIGH,
+            self.tr("模型精度 (INT8 / FP16)"),
+            "",
+            [p.value for p in OpenVINOModelPrecisionEnum],
+            self.setting_group,
+        )
+        self._make_card_wrappable(self.precision_card, min_height=96)
+        self.precision_card.comboBox.currentTextChanged.connect(
+            self._on_precision_changed
         )
 
         # 检查未下载的模型并从下拉框中移除
@@ -892,6 +972,7 @@ class FasterWhisperSettingWidget(QWidget):
 
         # 添加模型设置组的卡片
         self.setting_group.addSettingCard(self.model_card)
+        self.setting_group.addSettingCard(self.precision_card)
         self.setting_group.addSettingCard(self.manage_model_card)
         self.setting_group.addSettingCard(self.device_card)
         self.setting_group.addSettingCard(self.language_card)
@@ -914,10 +995,13 @@ class FasterWhisperSettingWidget(QWidget):
 
         # 设置组件最小宽度
         self.model_card.comboBox.setMinimumWidth(200)
+        self.precision_card.comboBox.setMinimumWidth(240)
         self.device_card.comboBox.setMinimumWidth(200)
         self.language_card.comboBox.setMinimumWidth(200)
         self.vad_method_card.comboBox.setMinimumWidth(200)
         self.prompt_card.lineEdit.setMinimumWidth(200)
+
+        self._update_precision_card_state()
 
         # 设置滚动区域
         self.scrollArea.setWidget(self.container)
@@ -926,8 +1010,85 @@ class FasterWhisperSettingWidget(QWidget):
         # 将滚动区域添加到主布局
         self.main_layout.addWidget(self.scrollArea)
 
+    @staticmethod
+    def _make_card_wrappable(card: ComboBoxSettingCard, min_height: int = 88) -> None:
+        card.contentLabel.setWordWrap(True)
+        card.contentLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        card.hBoxLayout.setStretch(2, 1)
+        card.hBoxLayout.setStretch(4, 0)
+        card.vBoxLayout.setAlignment(card.contentLabel, Qt.Alignment())  # type: ignore
+        card.setMinimumHeight(min_height)
+        card.setMaximumHeight(16777215)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
     def _is_intel_device(self) -> bool:
         return str(cfg.faster_whisper_device.value).lower().startswith("intel")
+
+    def _sync_precision_from_config(self):
+        target_text = cfg.faster_whisper_precision.value.value
+        if self.precision_card.comboBox.currentText() != target_text:
+            self.precision_card.comboBox.blockSignals(True)
+            self.precision_card.comboBox.setCurrentText(target_text)
+            self.precision_card.comboBox.blockSignals(False)
+        self._update_precision_card_description()
+
+    def _on_precision_changed(self, _text: str):
+        self._update_precision_card_description()
+
+    def _update_precision_card_state(self):
+        dev = str(cfg.faster_whisper_device.value or "").strip().lower()
+        is_intel = dev.startswith("intel")
+        is_npu = dev.startswith("intel_npu")
+
+        if is_npu and cfg.faster_whisper_precision.value != OpenVINOModelPrecisionEnum.INT8:
+            cfg.set(cfg.faster_whisper_precision, OpenVINOModelPrecisionEnum.INT8)
+            self._sync_precision_from_config()
+
+        self.precision_card.comboBox.setEnabled(is_intel and not is_npu)
+        self._update_precision_card_description()
+
+    def _update_precision_card_description(self):
+        if not hasattr(self, "precision_card"):
+            return
+        dev = str(cfg.faster_whisper_device.value or "").strip().lower()
+        model_enum = cfg.faster_whisper_model.value
+        model_name = model_enum.value if isinstance(model_enum, FasterWhisperModelEnum) else "large-v3-turbo"
+        int8_mb, fp16_mb = OPENVINO_MODEL_SIZES_MB.get(model_name, (0, 0))
+        size_pair = (
+            f"（当前 {model_name}：INT8 约 {int8_mb} MB vs FP16 约 {fp16_mb} MB）"
+            if int8_mb and fp16_mb
+            else ""
+        )
+
+        line1 = self.tr(
+            f"INT8：8位整数量化，体积与内存减半、下载快、更省电，识别率几乎无损（NPU 必选 / 核显与 CPU 推荐）{size_pair}"
+        )
+        line2 = self.tr(
+            "FP16：16位半精度浮点，保留原始浮点权重、体积约 2 倍，适合大显存独立显卡（如 Arc A770 / B580 / Pro B50）"
+        )
+        if not dev.startswith("intel"):
+            note = self.tr("提示：当前为非 OpenVINO 设备（cuda/cpu），此精度项仅在选择 intel_* 设备时生效。")
+            desc = f"{line1}\n{line2}\n{note}"
+        elif dev.startswith("intel_npu"):
+            note = self.tr("提示：Intel NPU 硬件仅支持 INT8 量化模型，已固定为 INT8。")
+            desc = f"{line1}\n{line2}\n{note}"
+        else:
+            desc = f"{line1}\n{line2}"
+
+        self.precision_card.setContent(desc)
+        self.precision_card.contentLabel.setToolTip(desc)
+
+        if hasattr(self, "model_card"):
+            prec_key = cfg.faster_whisper_precision.value.precision_key.upper()
+            if dev.startswith("intel"):
+                cur_mb = int8_mb if prec_key == "INT8" else fp16_mb
+                model_desc = self.tr(
+                    f"选择 Whisper 模型规模（越大越准、耗时越长；当前 {model_name} {prec_key} 约 {cur_mb} MB）"
+                )
+            else:
+                model_desc = self.tr("选择 Faster Whisper 模型（越大准确率越高，耗时与显存占用越大）")
+            self.model_card.setContent(model_desc)
+            self.model_card.contentLabel.setToolTip(model_desc)
 
     def _build_device_description(self, selected: str = "") -> str:
         choice = (selected or str(cfg.faster_whisper_device.value or "")).strip().lower()
@@ -946,6 +1107,7 @@ class FasterWhisperSettingWidget(QWidget):
         self.device_card.setContent(self._build_device_description(text))
         self.device_card.contentLabel.setToolTip(self.device_card.contentLabel.text())
         self._refresh_model_combo()
+        self._update_precision_card_state()
 
     def _refresh_model_combo(self):
         """根据运行设备刷新可选模型列表"""

@@ -467,7 +467,13 @@ class OpenVINOASR(BaseASR):
                 device,
             )
 
-        effective_override = precision_override or self.precision_override
+        effective_override = (precision_override or self.precision_override or "").strip().lower()
+        if _is_npu_device(device) and effective_override and effective_override != "int8":
+            logger.warning(
+                "Intel NPU only supports int8 Whisper models; overriding %s -> int8",
+                effective_override,
+            )
+            effective_override = "int8"
         precision = effective_override or (
             "int8"
             if (_is_npu_device(device) or device.upper().startswith("CPU"))

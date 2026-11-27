@@ -367,6 +367,17 @@ class FasterWhisperModelEnum(Enum):
     LARGE_V3_TURBO = "large-v3-turbo"
 
 
+class OpenVINOModelPrecisionEnum(Enum):
+    """OpenVINO Whisper 模型权重精度"""
+
+    INT8 = "INT8 (量化 · 体积减半 · NPU/核显推荐)"
+    FP16 = "FP16 (半精度 · 精度更高 · 独显推荐)"
+
+    @property
+    def precision_key(self) -> str:
+        return "int8" if self == OpenVINOModelPrecisionEnum.INT8 else "fp16"
+
+
 LANGUAGES = {
     "自动检测": "",
     "英语": "en",
@@ -585,6 +596,7 @@ class TranscribeConfig:
     faster_whisper_model: Optional[FasterWhisperModelEnum] = None
     faster_whisper_model_dir: Optional[str] = None
     faster_whisper_device: str = "cuda"
+    faster_whisper_precision: str = ""
     faster_whisper_vad_filter: bool = True
     faster_whisper_vad_threshold: float = 0.5
     faster_whisper_vad_method: Optional[VadMethodEnum] = VadMethodEnum.SILERO_V3
@@ -622,6 +634,8 @@ class TranscribeConfig:
                 f"Model: {self.faster_whisper_model.value if self.faster_whisper_model else 'None'}"
             )
             lines.append(f"Device: {self.faster_whisper_device}")
+            if self.faster_whisper_precision:
+                lines.append(f"Precision: {self.faster_whisper_precision}")
             lines.append(f"VAD Filter: {self.faster_whisper_vad_filter}")
             if self.faster_whisper_vad_filter:
                 lines.append(

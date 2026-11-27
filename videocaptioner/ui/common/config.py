@@ -22,6 +22,7 @@ from videocaptioner.config import SETTINGS_PATH, WORK_PATH
 from videocaptioner.core.entities import (
     FasterWhisperModelEnum,
     LLMServiceEnum,
+    OpenVINOModelPrecisionEnum,
     SubtitleLayoutEnum,
     SubtitleRenderModeEnum,
     TranscribeLanguageEnum,
@@ -193,6 +194,13 @@ class Config(QConfig):
         "Device",
         "cuda",
         OptionsValidator(["cuda", "cpu", "intel_gpu", "intel_cpu", "intel_npu"]),
+    )
+    faster_whisper_precision = OptionsConfigItem(
+        "FasterWhisper",
+        "Precision",
+        OpenVINOModelPrecisionEnum.INT8,
+        OptionsValidator(OpenVINOModelPrecisionEnum),
+        EnumSerializer(OpenVINOModelPrecisionEnum),
     )
     # VAD 参数
     faster_whisper_vad_filter = ConfigItem(

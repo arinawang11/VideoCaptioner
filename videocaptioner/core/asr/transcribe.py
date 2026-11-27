@@ -152,6 +152,7 @@ def _create_faster_whisper_asr(
             model_dir=config.faster_whisper_model_dir or "",
             language=config.transcribe_language,
             device=device,
+            precision=config.faster_whisper_precision or "",
             use_cache=True,
             need_word_time_stamp=config.need_word_time_stamp,
         )
