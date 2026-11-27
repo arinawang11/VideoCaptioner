@@ -99,6 +99,10 @@ python -c "import openvino as ov; c=ov.Core(); print(c.available_devices)"
 | v4 | 新增 `intel_cpu`、GPU 崩溃回退 CPU |
 | v5 | iGPU 自动 f32，GPU 可用 |
 | **v6** | NPU 原生时间戳 + 解码上限，三条路径全部可用 |
+| **v7** | 合并社区 PR #1 / #2（下载自愈、词级时间戳回退），修正 fp16 完整性误判 |
+
+v7：`VideoCaptioner-IntelArc-Setup-v7.exe`，902.5 MB，
+SHA-256 `697b41334c8f775a7d94459de1ed0e11ef5972a17db1f9555d499ef3f7811ecb`。
 
 v6：`VideoCaptioner-IntelArc-Setup-v6.exe`，902.5 MB，
 SHA-256 `6f7780b836ea172c82e6db0f2c855323aab137b527fbe3b7f4ae00a7832b9d6c`。

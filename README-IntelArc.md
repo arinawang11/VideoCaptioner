@@ -187,8 +187,8 @@ ISCC.exe build/installer.iss
 dist/VideoCaptioner-IntelArc-Setup-v6.exe
 ```
 
-v6 安装包：902.5 MB，SHA-256
-`6f7780b836ea172c82e6db0f2c855323aab137b527fbe3b7f4ae00a7832b9d6c`。
+v7 安装包：902.5 MB，SHA-256
+`697b41334c8f775a7d94459de1ed0e11ef5972a17db1f9555d499ef3f7811ecb`。
 
 ---
 
