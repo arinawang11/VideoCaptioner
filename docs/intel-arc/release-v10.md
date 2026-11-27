@@ -53,7 +53,7 @@ Windows `10.0.26300`，OpenVINO `2026.4.1`，模型 `large-v3-turbo-int8-ov`。
 | Intel NPU | int8，60 s chunk | 前 14 块约 9.2–10.6 s/60 s | **约 6.0x** | 第 15/24 块 `DEVICE_LOST`，回退 CPU |
 
 NPU 回退后 CPU 从零重跑完整音频：`210.4 s`（`6.6x`），本次**没有冻屏/死机**，但整体任务约 6 分钟。
-详细过程见 [`test-log-2026-11-27.md`](test-log-2026-11-27.md)。
+详细过程见 [`test-log-2026-11-27.md`](https://github.com/liu-nexotic/VideoCaptioner/blob/v1.4.3-intel.10/docs/intel-arc/test-log-2026-11-27.md)。
 
 ## 已知问题
 
