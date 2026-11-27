@@ -359,6 +359,11 @@ class OpenVINOASR(BaseASR):
             config["language"] = f"<|{self.language}|>"
         if self.need_word_time_stamp:
             config["word_timestamps"] = True
+        if _is_npu_device(self.used_device):
+            # Without an explicit cap the NPU decoder keeps running past the
+            # 30s window and trips the driver watchdog (DEVICE_LOST). 448 is
+            # Whisper's per-window maximum and is enough for 240s chunks.
+            config["max_new_tokens"] = 448
         return config
 
     @staticmethod
@@ -492,7 +497,12 @@ class OpenVINOASR(BaseASR):
     def _transcribe_npu(
         self, audio: "np.ndarray", callback: Callable[[int, str], None]
     ) -> List[ASRDataSeg]:
-        """Transcribe on Intel AI Boost NPU with pause segmentation (#4806, #37937)."""
+        """Fallback NPU path: pause segmentation per utterance.
+
+        Only used when the native-timestamp path returns no segments. Each
+        utterance costs a full 30s encoder pass, so this is ~3x slower than
+        the timestamped path.
+        """
         spans = segment_speech_for_npu(audio, sample_rate=16000)
         if not spans:
             return []
@@ -515,6 +525,7 @@ class OpenVINOASR(BaseASR):
                 # Workaround for openvino.genai#4806: return_timestamps=True
                 # corrupts/empties decoded text on NPU.
                 "return_timestamps": False,
+                "max_new_tokens": 448,
             }
             if self.language:
                 gen_kwargs["language"] = f"<|{self.language}|>"
@@ -638,6 +649,30 @@ class OpenVINOASR(BaseASR):
             callback(progress, f"transcribing {index + 1}/{chunk_count}")
         return all_segments
 
+    def _fallback_to_gpu(
+        self,
+        audio: "np.ndarray",
+        callback: Callable[[int, str], None],
+        exc: Exception,
+    ) -> List[ASRDataSeg]:
+        """Recreate the pipeline on the Intel GPU after an NPU failure."""
+        logger.warning(
+            "NPU inference failed (%s); retrying on Intel GPU "
+            "with the already downloaded int8 model",
+            exc,
+        )
+        callback(21, "NPU failed, switching to Intel GPU")
+        self.pipeline = None
+        self.used_device = ""
+        self.used_precision = ""
+        self.device = "intel_gpu"
+        gc.collect()
+        self._create_pipeline(
+            device_override="intel_gpu", precision_override="int8"
+        )
+        callback(21, f"transcribing on {self.used_device} ({self.used_precision})")
+        return self._transcribe_gpu(audio, callback)
+
     def _run(self, callback=None, **kwargs) -> str:
         if callback is None:
 
@@ -666,30 +701,29 @@ class OpenVINOASR(BaseASR):
                 raise RuntimeError("Empty audio input")
 
             if _is_npu_device(self.used_device):
+                # OpenVINO GenAI 2026.4 returns proper timestamps on the NPU,
+                # which is ~3x faster than per-utterance segmentation (one
+                # encoder pass per 30s window instead of one per utterance).
                 try:
-                    all_segments = self._transcribe_npu(audio, callback)
+                    all_segments = self._transcribe_gpu(audio, callback)
                 except Exception as exc:
                     if not _is_npu_failure(exc):
                         raise
-                    logger.warning(
-                        "NPU inference failed (%s); retrying on Intel GPU "
-                        "with the already downloaded int8 model",
-                        exc,
-                    )
-                    callback(21, "NPU failed, switching to Intel GPU")
-                    self.pipeline = None
-                    self.used_device = ""
-                    self.used_precision = ""
-                    self.device = "intel_gpu"
-                    gc.collect()
-                    self._create_pipeline(
-                        device_override="intel_gpu", precision_override="int8"
-                    )
-                    callback(
-                        21,
-                        f"transcribing on {self.used_device} ({self.used_precision})",
-                    )
-                    all_segments = self._transcribe_gpu(audio, callback)
+                    all_segments = self._fallback_to_gpu(audio, callback, exc)
+                else:
+                    if not all_segments:
+                        logger.warning(
+                            "NPU returned no segments with native timestamps; "
+                            "falling back to pause segmentation"
+                        )
+                        try:
+                            all_segments = self._transcribe_npu(audio, callback)
+                        except Exception as exc:
+                            if not _is_npu_failure(exc):
+                                raise
+                            all_segments = self._fallback_to_gpu(
+                                audio, callback, exc
+                            )
             else:
                 all_segments = self._transcribe_gpu(audio, callback)
 
