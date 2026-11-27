@@ -515,7 +515,9 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         if self.model_download_thread and self.model_download_thread.isRunning():
             self.model_download_thread.terminate()
         FasterWhisperDownloadDialog.is_downloading = False
-        self.reject()
+        # 不要在这里调用 self.reject()：本槽挂在 rejected 信号上，
+        # reject() 会再次 emit rejected，同步递归到 RecursionError。
+        # 取消按钮和 closeEvent 各自已经会走 QDialog.reject()/关闭流程。
 
     def closeEvent(self, event):
         """窗口关闭事件处理"""

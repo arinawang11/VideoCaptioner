@@ -1,5 +1,6 @@
 import logging
 import logging.handlers
+import os
 from pathlib import Path
 
 from ...config import LOG_LEVEL, LOG_PATH
@@ -11,7 +12,7 @@ def setup_logger(
     info_fmt: str = "%(message)s",  # INFO级别使用简化格式
     default_fmt: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",  # 其他级别使用详细格式
     datefmt: str = "%Y-%m-%d %H:%M:%S",
-    log_file: str = str(LOG_PATH / "app.log"),
+    log_file: str = "",
     console_output: bool = True,
 ) -> logging.Logger:
     """
@@ -28,6 +29,14 @@ def setup_logger(
 
     logger = logging.getLogger(name)
     logger.setLevel(level)
+
+    # UI 进程和 OpenVINO worker 进程不能共写同一个轮转日志：两边的
+    # RotatingFileHandler 各自轮转时，另一进程因句柄被占用 rename 失败
+    # 丢日志（Windows PermissionError）。worker 进程在入口设置
+    # VIDEOCAPTIONER_LOG_FILE（仅文件名），日志统一落在 LOG_PATH 下。
+    if not log_file:
+        env_log = os.environ.get("VIDEOCAPTIONER_LOG_FILE")
+        log_file = str(LOG_PATH / env_log) if env_log else str(LOG_PATH / "app.log")
 
     if not logger.handlers:
         class LevelSpecificFormatter(logging.Formatter):

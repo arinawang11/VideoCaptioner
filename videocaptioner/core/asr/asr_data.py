@@ -499,7 +499,9 @@ class ASRData:
             next_seg = self.segments[i + 1]
             time_gap = next_seg.start_time - current_seg.end_time
 
-            if time_gap < threshold_ms:
+            # 只收紧正向小间隙；相邻段重叠（负 gap）时按原边界输出，
+            # 否则中点公式会算出 start > end 的倒挂时间轴
+            if 0 <= time_gap < threshold_ms:
                 mid_time = (
                     current_seg.end_time + next_seg.start_time
                 ) // 2 + time_gap // 4

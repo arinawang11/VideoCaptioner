@@ -111,8 +111,10 @@ class BaseASR:
         # Run ASR
         resp_data = self._run(callback, **kwargs)
 
-        # Cache result
-        self._cache.set(cache_key, resp_data, expire=86400 * 2)
+        # Cache result (与读侧条件保持一致；worker 进程 use_cache=False，
+        # 之前无条件写导致每次转录都留下一条永不被读的死缓存)
+        if self.use_cache and is_cache_enabled():
+            self._cache.set(cache_key, resp_data, expire=86400 * 2)
 
         segments = self._make_segments(resp_data)
         return ASRData(segments)
