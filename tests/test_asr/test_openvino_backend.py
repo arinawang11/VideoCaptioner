@@ -301,3 +301,73 @@ def test_transcribe_device_choices_merge_gpu_names():
     # Without display enumeration the automatic Intel GPU entry must survive.
     no_gpu = build_device_choices([])
     assert ("Intel GPU（自动，优先独显）", "intel_gpu", "") in no_gpu
+
+def test_worker_output_stops_at_terminal_marker():
+    """DONE/ERROR end the protocol; do not block waiting for EOF."""
+    from videocaptioner.core.asr.openvino_process import OpenVINOProcessASR
+
+    class FakeStream:
+        def __init__(self, lines):
+            self.lines = list(lines)
+            self.read_count = 0
+
+        def readline(self):
+            if self.read_count >= len(self.lines):
+                raise AssertionError("read past the terminal marker")
+            line = self.lines[self.read_count]
+            self.read_count += 1
+            return line
+
+    events = []
+    stream = FakeStream(
+        [
+            "PROGRESS 20|设备: GPU.1 · Arc (dGPU) (int8)\n",
+            "PROGRESS 100|completed\n",
+            "DONE\n",
+            "never read\n",
+        ]
+    )
+    completed, device, errors, recent = OpenVINOProcessASR._consume_worker_output(
+        stream, lambda p, m: events.append((p, m))
+    )
+    assert completed is True
+    assert device == "GPU.1 · Arc (dGPU) (int8)"
+    assert errors == [] and recent == []
+    assert stream.read_count == 3
+    assert events[-1] == (100, "completed")
+
+    completed, _device, errors, _recent = OpenVINOProcessASR._consume_worker_output(
+        FakeStream(["ERROR boom\n", "never read\n"]), lambda p, m: None
+    )
+    assert completed is False
+    assert errors == ["boom"]
+
+
+def test_run_worker_kills_child_stuck_after_done(tmp_path):
+    """A worker that prints DONE then hangs in teardown must not block the GUI."""
+    import sys
+    import time
+
+    from videocaptioner.core.asr.openvino_process import OpenVINOProcessASR
+
+    script = tmp_path / "fake_worker.py"
+    script.write_text(
+        "import time\n"
+        "print('PROGRESS 100|completed', flush=True)\n"
+        "print('DONE', flush=True)\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "openvino_output.srt"
+    output.write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8")
+
+    worker = object.__new__(OpenVINOProcessASR)
+    worker.active_device_label = ""
+    started = time.perf_counter()
+    ok, detail = worker._run_worker(
+        [sys.executable, str(script)], output, lambda p, m: None
+    )
+    elapsed = time.perf_counter() - started
+
+    assert ok, detail
+    assert elapsed < 15

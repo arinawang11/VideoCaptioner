@@ -79,10 +79,20 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # OpenVINO/TBB teardown can hang while unloading DLLs at interpreter
+    # shutdown, leaving the parent waiting for EOF forever. The result file is
+    # already closed here, so leave via os._exit() after flushing the protocol.
+    exit_code = 0
     try:
-        sys.exit(main())
+        exit_code = main()
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         message = str(e).replace("\n", " ").replace("\r", " ")
         print(f"ERROR {message}", flush=True)
-        sys.exit(1)
+        exit_code = 1
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(exit_code)

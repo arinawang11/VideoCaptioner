@@ -108,6 +108,47 @@ class OpenVINOProcessASR(BaseASR):
             cmd.append("--words")
         return cmd
 
+    @staticmethod
+    def _consume_worker_output(
+        stream, callback
+    ) -> Tuple[bool, str, List[str], List[str]]:
+        """Read the worker protocol until ``DONE`` or ``ERROR``.
+
+        Both markers are terminal. Do not wait for EOF: OpenVINO/TBB teardown
+        can hang while unloading DLLs, which used to leave the GUI at 100%.
+        """
+        completed = False
+        device_label = ""
+        error_messages: List[str] = []
+        recent_lines: List[str] = []
+        while True:
+            line = stream.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("PROGRESS "):
+                try:
+                    value, message = line[len("PROGRESS ") :].split("|", 1)
+                    if message.startswith("设备: "):
+                        device_label = message[len("设备: ") :].strip()
+                    callback(int(float(value)), message)
+                except Exception:
+                    pass
+            elif line.startswith("ERROR "):
+                error_messages.append(line[len("ERROR ") :])
+                break
+            elif line == "DONE":
+                callback(100, "completed")
+                completed = True
+                break
+            else:
+                recent_lines.append(line)
+                if len(recent_lines) > 40:
+                    recent_lines.pop(0)
+        return completed, device_label, error_messages, recent_lines
+
     def _run_worker(
         self, cmd: List[str], output_path: Path, callback
     ) -> Tuple[bool, str]:
@@ -137,39 +178,32 @@ class OpenVINOProcessASR(BaseASR):
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
 
-        error_messages: List[str] = []
-        recent_lines: List[str] = []
         assert process.stdout is not None
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("PROGRESS "):
-                try:
-                    value, message = line[len("PROGRESS ") :].split("|", 1)
-                    if message.startswith("设备: "):
-                        self.active_device_label = message[len("设备: ") :].strip()
-                        logger.info(
-                            "OpenVINO active runtime device: %s",
-                            self.active_device_label,
-                        )
-                    callback(int(float(value)), message)
-                except Exception:
-                    pass
-            elif line.startswith("ERROR "):
-                error_messages.append(line[len("ERROR ") :])
-            elif line == "DONE":
-                callback(100, "completed")
-            else:
-                recent_lines.append(line)
-                if len(recent_lines) > 40:
-                    recent_lines.pop(0)
+        completed, device_label, error_messages, recent_lines = (
+            self._consume_worker_output(process.stdout, callback)
+        )
+        if device_label:
+            self.active_device_label = device_label
+            logger.info("OpenVINO active runtime device: %s", device_label)
 
-        process.wait()
-        if process.returncode == 0 and output_path.exists():
+        # DONE/ERROR already arrived; the worker may still be stuck in
+        # interpreter/DLL teardown. Give it a moment, then force it down.
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "OpenVINO worker did not exit after %s; terminating process",
+                "DONE" if completed else "ERROR",
+            )
+            process.kill()
+            process.wait()
+        finally:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+
+        if output_path.exists() and (completed or process.returncode == 0):
             return True, ""
 
         detail = "\n".join(error_messages) or "\n".join(recent_lines[-15:])
