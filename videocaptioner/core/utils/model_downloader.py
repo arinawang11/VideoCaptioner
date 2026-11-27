@@ -561,7 +561,19 @@ OPENVINO_MODEL_REQUIRED_FILES = (
     "openvino_decoder_model.bin",
     "openvino_detokenizer.xml",
     "openvino_detokenizer.bin",
+    "openvino_tokenizer.xml",
+    "openvino_tokenizer.bin",
     "preprocessor_config.json",
+    "openvino_config.json",
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+    "normalizer.json",
+    "added_tokens.json",
+    "special_tokens_map.json",
 )
 
 
