@@ -18,6 +18,7 @@ from qfluentwidgets import (
 
 from videocaptioner.config import ASSETS_PATH, GITHUB_REPO_URL
 from videocaptioner.core.constant import INFOBAR_DURATION_FOREVER
+from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.ui.common.config import cfg
 from videocaptioner.ui.components.DonateDialog import DonateDialog
 from videocaptioner.ui.thread.version_checker_thread import VersionChecker
@@ -28,18 +29,24 @@ from videocaptioner.ui.view.setting_interface import SettingInterface
 from videocaptioner.ui.view.subtitle_style_interface import SubtitleStyleInterface
 
 LOGO_PATH = ASSETS_PATH / "logo.png"
+logger = setup_logger("ui")
 
 
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         self.initWindow()
+        logger.info("UI startup: window initialized")
 
         # 创建子界面
         self.homeInterface = HomeInterface(self)
+        logger.info("UI startup: home page ready")
         self.settingInterface = SettingInterface(self)
+        logger.info("UI startup: settings page ready")
         self.subtitleStyleInterface = SubtitleStyleInterface(self)
+        logger.info("UI startup: subtitle page ready")
         self.batchProcessInterface = BatchProcessInterface(self)
+        logger.info("UI startup: batch page ready")
         self.llmLogsInterface = LLMLogsInterface(self)
 
         # 初始化版本检查器
@@ -58,6 +65,7 @@ class MainWindow(FluentWindow):
 
         # 检查系统依赖
         self._check_ffmpeg()
+        logger.info("UI startup: main window ready")
 
         # 注册退出处理， 清理进程
         atexit.register(self.stop)

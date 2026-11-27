@@ -59,6 +59,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings, True)  # type: ignore
+    logger.info("UI startup: QApplication created")
 
     # i18n
     locale = cfg.get(cfg.language).value
@@ -67,8 +68,11 @@ def main():
     my_translator.load(str(TRANSLATIONS_PATH / f"VideoCaptioner_{locale.name()}.qm"))
     app.installTranslator(my_translator)
 
+    logger.info("UI startup: constructing MainWindow")
     w = MainWindow()
+    logger.info("UI startup: showing MainWindow")
     w.show()
+    logger.info("UI startup: shown, entering event loop")
     sys.exit(app.exec_())
 
 

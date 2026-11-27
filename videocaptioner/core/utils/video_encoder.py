@@ -466,12 +466,23 @@ def list_qsv_adapters(probe_codec: str = "h264_qsv") -> List[dict]:
 
 
 def qsv_adapter_choices() -> List[tuple[str, str]]:
-    """Return ``[(display_text, adapter_name)]`` for UI selectors."""
-    choices: List[tuple[str, str]] = []
+    """Return ``[(display_text, adapter_name)]`` for UI selectors.
+
+    Enumerated from the display adapters only. Probing QSV with ffmpeg from the
+    GUI process initialises the shared iGPU media driver and has hard-frozen a
+    Meteor Lake laptop during startup; the concrete D3D11 index is still probed
+    by ``best_qsv_device`` when a synthesis actually runs.
+    """
+    from .hardware import classify_intel_gpu_name, display_adapters
+
     labels = {"discrete": "独显", "integrated": "核显", "unknown": "GPU"}
-    for adapter in list_qsv_adapters():
-        kind = labels.get(adapter["kind"], "GPU")
-        choices.append((f"{adapter['name']}  ·  #{adapter['index']} {kind}", adapter["name"]))
+    choices: List[tuple[str, str]] = []
+    for name in display_adapters():
+        if "intel" not in name.lower():
+            continue
+        kind = labels.get(classify_intel_gpu_name(name), "GPU")
+        choices.append((f"{name}  ·  {kind}", name))
+    return choices
     return choices
 
 

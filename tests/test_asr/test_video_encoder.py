@@ -251,3 +251,30 @@ def test_build_video_encode_args_per_encoder():
 
     vp9_sw = build_video_encode_args("libvpx-vp9", crf=28, preset="fast", output_path="a.webm")
     assert "-b:v" in vp9_sw and "-cpu-used" in vp9_sw
+
+def test_qsv_adapter_choices_never_probes_ffmpeg(monkeypatch):
+    """The GUI must list adapters without initialising QSV in-process/ffmpeg."""
+    import videocaptioner.core.utils.hardware as hw
+    import videocaptioner.core.utils.video_encoder as ve
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("qsv_adapter_choices must not probe QSV")
+
+    monkeypatch.setattr(ve, "list_qsv_adapters", _boom)
+    monkeypatch.setattr(
+        hw,
+        "display_adapters",
+        lambda: [
+            "Intel(R) Arc(TM) Graphics",
+            "Intel(R) Arc(TM) Pro B50 Graphics",
+            "GameViewer Virtual Display Adapter",
+        ],
+    )
+
+    choices = ve.qsv_adapter_choices()
+    assert [name for _display, name in choices] == [
+        "Intel(R) Arc(TM) Graphics",
+        "Intel(R) Arc(TM) Pro B50 Graphics",
+    ]
+    assert "核显" in choices[0][0]
+    assert "独显" in choices[1][0]
