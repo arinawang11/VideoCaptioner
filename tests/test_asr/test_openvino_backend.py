@@ -247,3 +247,27 @@ def test_resolve_openvino_device_npu_falls_back_to_named_gpu(monkeypatch):
     assert (
         hw.resolve_openvino_device("intel_npu", "Intel(R) UHD Graphics 770") == "GPU.0"
     )
+
+def test_intel_gpu_kind_classification_and_choices(monkeypatch):
+    import videocaptioner.core.utils.hardware as hw
+
+    assert hw.classify_intel_gpu_name("Intel(R) UHD Graphics 770") == "integrated"
+    assert hw.classify_intel_gpu_name("Intel(R) Iris(R) Xe Graphics") == "integrated"
+    assert hw.classify_intel_gpu_name("Intel(R) Arc(TM) Pro B50 Graphics") == "discrete"
+    assert hw.classify_intel_gpu_name("GameViewer Virtual Display") == "unknown"
+
+    monkeypatch.setattr(
+        hw,
+        "intel_gpu_adapters",
+        lambda: [
+            "Intel(R) UHD Graphics 770",
+            "Intel(R) Arc(TM) Pro B50 Graphics",
+        ],
+    )
+    choices = hw.openvino_gpu_choices()
+    assert [name for _label, name in choices] == [
+        "Intel(R) UHD Graphics 770",
+        "Intel(R) Arc(TM) Pro B50 Graphics",
+    ]
+    assert "核显" in choices[0][0]
+    assert "独显" in choices[1][0]

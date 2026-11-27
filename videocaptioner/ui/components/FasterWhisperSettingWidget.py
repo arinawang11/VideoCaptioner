@@ -903,7 +903,7 @@ class FasterWhisperSettingWidget(QWidget):
         self.device_card.comboBox.currentTextChanged.connect(self._on_device_changed)
 
         # 具体 GPU 适配器（按名称，多显卡机器精确选择）
-        from videocaptioner.core.utils.hardware import intel_gpu_adapters
+        from videocaptioner.core.utils.hardware import openvino_gpu_choices
         from videocaptioner.ui.components.GpuSettingCard import (
             GpuComboBoxSettingCard,
         )
@@ -915,9 +915,7 @@ class FasterWhisperSettingWidget(QWidget):
                 "仅在“运行设备”为 intel_gpu 时生效"
             ),
             self.setting_group,
-            choices_provider=lambda: [
-                (name, name) for name in intel_gpu_adapters()
-            ],
+            choices_provider=openvino_gpu_choices,
             auto_label=self.tr("自动（优先独显）"),
         )
         self.gpu_card.setValue(cfg.faster_whisper_gpu.value)

@@ -74,6 +74,32 @@ def intel_gpu_adapters() -> List[str]:
     return [name for name in display_adapters() if "intel" in name.lower()]
 
 
+def classify_intel_gpu_name(name: str) -> str:
+    """Return ``discrete`` / ``integrated`` / ``unknown`` for an adapter name."""
+    lowered = (name or "").lower()
+    if "arc" in lowered:
+        return "discrete"
+    if any(tag in lowered for tag in ("uhd", "iris", "hd graphics", "graphics 7")):
+        return "integrated"
+    if "intel" in lowered and "graphics" in lowered:
+        return "integrated"
+    return "unknown"
+
+
+def openvino_gpu_choices() -> List[Tuple[str, str]]:
+    """Return ``[(display_text, adapter_name)]`` for the transcription UI.
+
+    Uses display adapters (never imports OpenVINO in the UI process); the name
+    is matched to the OpenVINO device at run time.
+    """
+    labels = {"discrete": "独显", "integrated": "核显", "unknown": "GPU"}
+    choices: List[Tuple[str, str]] = []
+    for name in intel_gpu_adapters():
+        kind = classify_intel_gpu_name(name)
+        choices.append((f"{name}  ·  {labels[kind]}", name))
+    return choices
+
+
 def is_intel_arc(name: str) -> bool:
     return "arc" in (name or "").lower()
 
