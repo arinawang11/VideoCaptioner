@@ -735,10 +735,11 @@ class FasterWhisperSettingWidget(QWidget):
             self.tr("运行设备"),
             self.tr(
                 "cuda: NVIDIA 显卡；intel_gpu: Intel Arc（A/B 系列）/核显；"
+                "intel_cpu: Intel CPU（OpenVINO，稳定回退）；"
                 "intel_npu: Intel AI Boost NPU（酷睿 Ultra，如 155H）；cpu: 处理器\n"
                 f"检测结果：{describe_hardware()}"
             ),
-            ["cuda", "cpu", "intel_gpu", "intel_npu"],
+            ["cuda", "cpu", "intel_gpu", "intel_cpu", "intel_npu"],
             self.setting_group,
         )
         self.device_card.comboBox.currentTextChanged.connect(

@@ -190,7 +190,7 @@ class Config(QConfig):
         "FasterWhisper",
         "Device",
         "cuda",
-        OptionsValidator(["cuda", "cpu", "intel_gpu", "intel_npu"]),
+        OptionsValidator(["cuda", "cpu", "intel_gpu", "intel_cpu", "intel_npu"]),
     )
     # VAD 参数
     faster_whisper_vad_filter = ConfigItem(

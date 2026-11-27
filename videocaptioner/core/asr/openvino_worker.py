@@ -43,6 +43,8 @@ def main() -> int:
     parser.add_argument("--model", required=True)
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--device", default="intel_gpu")
+    parser.add_argument("--precision", default="")
+    parser.add_argument("--precision-hint", default="")
     parser.add_argument("--language", default="en")
     parser.add_argument("--output", required=True)
     parser.add_argument("--words", action="store_true")
@@ -58,6 +60,8 @@ def main() -> int:
         device=args.device,
         use_cache=False,
         need_word_time_stamp=args.words,
+        precision=args.precision,
+        precision_hint=args.precision_hint,
     )
     data = asr.run(callback=emit_progress)
 

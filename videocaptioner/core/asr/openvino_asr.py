@@ -49,6 +49,7 @@ from ..utils.logger import setup_logger
 from ..utils.model_downloader import (
     OPENVINO_WHISPER_REPOS,
     ensure_openvino_whisper_model,
+    openvino_whisper_model_dir,
 )
 from .asr_data import ASRData, ASRDataSeg
 from .base import BaseASR
@@ -67,6 +68,50 @@ NPU_MIN_SILENCE_SEC = 0.30
 
 def _is_npu_device(device: str) -> bool:
     return (device or "").strip().upper().startswith("NPU")
+
+
+def _gpu_precision_hint(device: str, explicit: str = "") -> str:
+    """Choose an ``INFERENCE_PRECISION_HINT`` for the target device.
+
+    Intel's IGC compiler aborts the process on some integrated GPUs (notably
+    engineering-sample Meteor Lake units) while compiling fp16 kernels for the
+    Whisper encoder; f32 kernels work. Discrete Arc GPUs are fine with fp16, so
+    only integrated GPUs default to f32.
+
+    Override with ``VIDEOCAPTIONER_OPENVINO_GPU_PRECISION=f32|fp16``.
+    """
+    hint = (explicit or "").strip().lower()
+    if not (device or "").upper().startswith("GPU"):
+        return ""
+    if hint not in ("f32", "fp16"):
+        hint = os.environ.get(
+            "VIDEOCAPTIONER_OPENVINO_GPU_PRECISION", ""
+        ).strip().lower()
+    if hint in ("f32", "fp16"):
+        return hint
+    try:
+        from ..utils.hardware import intel_gpu_devices
+
+        name = dict(intel_gpu_devices()).get(device, "")
+    except Exception:
+        name = ""
+    return "f32" if "(iGPU)" in name else ""
+
+
+def _is_npu_failure(error: Exception) -> bool:
+    """Whether an exception looks like an NPU/Level Zero failure."""
+    message = str(error).lower()
+    return any(
+        key in message
+        for key in (
+            "device_lost",
+            "device hung",
+            "ze_result",
+            "zefence",
+            "npu",
+            "npu driver",
+        )
+    )
 
 
 def _read_wav_mono_16k(path: str) -> "np.ndarray":
@@ -287,6 +332,8 @@ class OpenVINOASR(BaseASR):
         device: str = "intel_gpu",
         use_cache: bool = False,
         need_word_time_stamp: bool = False,
+        precision: str = "",
+        precision_hint: str = "",
     ):
         super().__init__(audio_input, use_cache, need_word_time_stamp)
         if whisper_model not in OPENVINO_WHISPER_REPOS:
@@ -295,6 +342,8 @@ class OpenVINOASR(BaseASR):
         self.model_dir = Path(model_dir) if model_dir else Path(MODEL_PATH)
         self.language = language
         self.device = device
+        self.precision_override = precision or None
+        self.precision_hint = precision_hint or ""
         self.need_word_time_stamp = need_word_time_stamp
         self.pipeline = None
         self.used_device = ""
@@ -319,11 +368,18 @@ class OpenVINOASR(BaseASR):
         except TypeError:
             return ov_genai.WhisperPipeline(str(model_path), device)
 
-    def _create_pipeline(self):
+    def _create_pipeline(self, device_override=None, precision_override=None):
         import openvino_genai as ov_genai
 
-        requested_npu = (self.device or "").lower().startswith(("intel_npu", "npu"))
-        device = resolve_openvino_device(self.device)
+        if device_override:
+            device = str(device_override)
+            if not device.upper().startswith(("GPU", "CPU", "NPU", "AUTO")):
+                device = resolve_openvino_device(device)
+        else:
+            device = resolve_openvino_device(self.device)
+        requested_npu = (self.device or "").lower().startswith(
+            ("intel_npu", "npu")
+        ) and not device_override
         if requested_npu and not _is_npu_device(device):
             logger.warning(
                 "Intel NPU was requested (%s) but is unavailable in OpenVINO; "
@@ -332,7 +388,27 @@ class OpenVINOASR(BaseASR):
                 device,
             )
 
-        precision = "int8" if _is_npu_device(device) else "fp16"
+        effective_override = precision_override or self.precision_override
+        precision = effective_override or (
+            "int8"
+            if (_is_npu_device(device) or device.upper().startswith("CPU"))
+            else "fp16"
+        )
+        if precision == "fp16" and not effective_override:
+            # The installer ships the int8 model only; use it on GPU/CPU too
+            # instead of triggering a 1.5GB fp16 download.
+            int8_path = openvino_whisper_model_dir(
+                self.model_dir, self.model_name, precision="int8"
+            )
+            fp16_path = openvino_whisper_model_dir(
+                self.model_dir, self.model_name, precision="fp16"
+            )
+            if int8_path.exists() and not fp16_path.exists():
+                logger.info(
+                    "Using the bundled int8 model on %s (fp16 model not installed)",
+                    device,
+                )
+                precision = "int8"
         model_path = ensure_openvino_whisper_model(
             self.model_name,
             self.model_dir,
@@ -343,13 +419,29 @@ class OpenVINOASR(BaseASR):
         cache_dir = Path(self.model_dir) / "openvino" / ".cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         properties = {"CACHE_DIR": str(cache_dir)}
+        precision_hint = _gpu_precision_hint(device, self.precision_hint)
+        if precision_hint:
+            properties["INFERENCE_PRECISION_HINT"] = precision_hint
 
         logger.info(
-            "Loading OpenVINO model: %s (device: %s, precision: %s)",
+            "Loading OpenVINO model: %s (device: %s, precision: %s%s)",
             model_path,
             device,
             precision,
+            f", hint: {precision_hint}" if precision_hint else "",
         )
+        if _is_npu_device(device) and self.model_name in (
+            "medium",
+            "large-v1",
+            "large-v2",
+            "large-v3",
+            "large-v3-turbo",
+        ):
+            logger.warning(
+                "Model %s is heavy for Intel NPU (Meteor Lake); "
+                "small/base are recommended, GPU is preferred for large models",
+                self.model_name,
+            )
         try:
             pipeline = self._construct_pipeline(ov_genai, model_path, device, properties)
         except Exception as first_err:
@@ -517,6 +609,35 @@ class OpenVINOASR(BaseASR):
             segments.append(ASRDataSeg(text, start, end))
         return segments
 
+    def _transcribe_gpu(
+        self, audio: "np.ndarray", callback: Callable[[int, str], None]
+    ) -> List[ASRDataSeg]:
+        """Standard GPU/CPU path with native timestamps (240s chunks)."""
+        total_samples = len(audio)
+        chunk_samples = CHUNK_SECONDS * 16000
+        chunk_count = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
+        config = self._build_config()
+
+        all_segments: List[ASRDataSeg] = []
+        for index in range(chunk_count):
+            start_sample = index * chunk_samples
+            end_sample = min(total_samples, start_sample + chunk_samples)
+            chunk = audio[start_sample:end_sample]
+            offset = start_sample / 16000.0
+
+            logger.info(
+                "Transcribing chunk %d/%d (%.1fs - %.1fs)",
+                index + 1,
+                chunk_count,
+                offset,
+                end_sample / 16000.0,
+            )
+            all_segments.extend(self._transcribe_chunk(chunk, offset, config))
+
+            progress = 20 + int(78 * (index + 1) / chunk_count)
+            callback(progress, f"transcribing {index + 1}/{chunk_count}")
+        return all_segments
+
     def _run(self, callback=None, **kwargs) -> str:
         if callback is None:
 
@@ -545,30 +666,32 @@ class OpenVINOASR(BaseASR):
                 raise RuntimeError("Empty audio input")
 
             if _is_npu_device(self.used_device):
-                all_segments = self._transcribe_npu(audio, callback)
-            else:
-                chunk_samples = CHUNK_SECONDS * 16000
-                chunk_count = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
-                config = self._build_config()
-
-                all_segments = []
-                for index in range(chunk_count):
-                    start_sample = index * chunk_samples
-                    end_sample = min(total_samples, start_sample + chunk_samples)
-                    chunk = audio[start_sample:end_sample]
-                    offset = start_sample / 16000.0
-
-                    logger.info(
-                        "Transcribing chunk %d/%d (%.1fs - %.1fs)",
-                        index + 1,
-                        chunk_count,
-                        offset,
-                        end_sample / 16000.0,
+                try:
+                    all_segments = self._transcribe_npu(audio, callback)
+                except Exception as exc:
+                    if not _is_npu_failure(exc):
+                        raise
+                    logger.warning(
+                        "NPU inference failed (%s); retrying on Intel GPU "
+                        "with the already downloaded int8 model",
+                        exc,
                     )
-                    all_segments.extend(self._transcribe_chunk(chunk, offset, config))
-
-                    progress = 20 + int(78 * (index + 1) / chunk_count)
-                    callback(progress, f"transcribing {index + 1}/{chunk_count}")
+                    callback(21, "NPU failed, switching to Intel GPU")
+                    self.pipeline = None
+                    self.used_device = ""
+                    self.used_precision = ""
+                    self.device = "intel_gpu"
+                    gc.collect()
+                    self._create_pipeline(
+                        device_override="intel_gpu", precision_override="int8"
+                    )
+                    callback(
+                        21,
+                        f"transcribing on {self.used_device} ({self.used_precision})",
+                    )
+                    all_segments = self._transcribe_gpu(audio, callback)
+            else:
+                all_segments = self._transcribe_gpu(audio, callback)
 
             if not all_segments:
                 raise RuntimeError("No speech recognized; check the audio or the model")

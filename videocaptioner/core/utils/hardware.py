@@ -286,6 +286,9 @@ def resolve_openvino_device(preference: str) -> str:
     """
     preference = (preference or "").lower()
 
+    if preference.startswith("intel_cpu") or preference.startswith("intel-cpu"):
+        return "CPU"
+
     if preference.startswith("intel_npu") or preference.startswith("npu"):
         npus = intel_npu_devices()
         if npus:

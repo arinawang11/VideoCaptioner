@@ -126,3 +126,34 @@ def test_clause_splitting_keeps_total_time():
         "Second sentence!",
         "Third sentence?",
     ]
+
+def test_gpu_precision_hint_explicit_and_env(monkeypatch):
+    from videocaptioner.core.asr.openvino_asr import _gpu_precision_hint
+
+    assert _gpu_precision_hint("GPU", "f32") == "f32"
+    assert _gpu_precision_hint("GPU", "fp16") == "fp16"
+
+    monkeypatch.setenv("VIDEOCAPTIONER_OPENVINO_GPU_PRECISION", "fp16")
+    assert _gpu_precision_hint("GPU") == "fp16"
+    assert _gpu_precision_hint("CPU") == ""
+
+
+def test_gpu_precision_hint_uses_f32_on_integrated_gpu(monkeypatch):
+    from videocaptioner.core.asr.openvino_asr import _gpu_precision_hint
+    from videocaptioner.core.utils import hardware
+
+    monkeypatch.delenv("VIDEOCAPTIONER_OPENVINO_GPU_PRECISION", raising=False)
+
+    monkeypatch.setattr(
+        hardware,
+        "intel_gpu_devices",
+        lambda: [("GPU", "Intel(R) Arc(TM) Graphics (iGPU)")],
+    )
+    assert _gpu_precision_hint("GPU") == "f32"
+
+    monkeypatch.setattr(
+        hardware,
+        "intel_gpu_devices",
+        lambda: [("GPU.1", "Intel(R) Arc(TM) Pro B50 Graphics (dGPU)")],
+    )
+    assert _gpu_precision_hint("GPU.1") == ""

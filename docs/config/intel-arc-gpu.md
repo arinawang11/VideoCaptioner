@@ -33,6 +33,14 @@ pip install -e ".[intel]"
 pip install "videocaptioner[intel]"
 ```
 
+Windows 安装包（`VideoCaptioner-IntelArc-Setup-v3`）额外内置：
+
+- OpenVINO 2026.4.1 运行时：Intel GPU 插件、Intel NPU 插件 + NPU 编译器、CPU 插件
+- `whisper-large-v3-turbo-int8-ov` 模型（约 790MB）
+
+安装后 GPU/CPU 在没有 fp16 模型时会直接复用该 int8 模型，首次转录不需要联网下载。
+NPU 驱动属于系统驱动（Intel NPU Driver ≥ 32.0.100.3104），仍需单独安装。
+
 `intel` 可选依赖固定为相互兼容的版本：
 
 ```
@@ -113,6 +121,12 @@ Intel NPU（AI Boost，11 TOPS INT8，Meteor Lake NPU 3720）在 OpenVINO 2026.x
    → NPU 初始化失败时自动设置 `DISABLE_OPENVINO_GENAI_NPU_L0=1` 重试；
    仍失败则回退到 Intel GPU；worker 退出前显式销毁 pipeline（`gc.collect()`）。
 
+4. **大模型导致 NPU device lost**
+   Meteor Lake NPU 3720 跑 `large-v3-turbo` 时，首次加载约 5 分钟，推理中可能报
+   `ZE_RESULT_ERROR_DEVICE_LOST`（device hung / reset）。
+   → 捕获该错误后自动切换到 Intel GPU，复用同一 int8 模型继续转录，不再中断任务；
+   NPU 上建议使用 `small` / `base`，大模型优先 `intel_gpu`。
+
 NPU 不可用时（未装驱动 / 非 Core Ultra），选择 `intel_npu` 会自动回退到 Intel GPU，
 并在日志中给出提示，不会中断转录。
 
@@ -172,3 +186,36 @@ NPU 检测在 UI 进程里通过 Windows 注册表完成（`VEN_8086&DEV_7D1D/AD
 Arc A 系列使用同一套 OpenVINO GPU 插件与 fp16 模型，代码路径完全一致；
 Core Ultra 7 155H 的 NPU 3720 使用 int8 模型与 NPU 专用分支，
 实际速度受型号、驱动与功耗策略影响，建议先用 `small` 验证。
+
+
+## 集成显卡 fp16 kernel 崩溃（工程样品机器）
+
+现象：
+
+- `intel_gpu` 转写时 worker 在 `Transcribing chunk 1/N` 之后立刻消失，日志里没有 ERROR
+- WER 记录 `pythonw.exe`、`BEX64`、`0xc0000409`（fast-fail 7 = `FAST_FAIL_FATAL_APP_EXIT`，即 `abort()`）、
+  故障模块 `ucrtbase.dll`，同时加载 `openvino_intel_gpu_plugin.dll`、`igdrcl64.dll`、`igc-default64.dll`
+- 最小复现：对 `whisper-large-v3-turbo` 的 encoder 做一次 `[1, 128, 3000]` 推理，
+  1 秒内 `Fatal Python error: Aborted`；换成 `INFERENCE_PRECISION_HINT=f32` 后同一推理 3.4 秒成功
+
+结论：IGC 编译器在这台工程样品 iGPU（`PCI\VEN_8086&DEV_7D03`）上为 Whisper encoder
+生成 fp16 kernel 时直接 `abort()`。这是原生进程退出，Python 的 `try/except` 完全捕获不到，
+所以界面只能看到 worker 最后一行 stdout。
+
+策略：
+
+- OpenVINO 设备名包含 `(iGPU)` 时，自动对 GPU 使用 `INFERENCE_PRECISION_HINT=f32`
+- 独立显卡（`(dGPU)`）继续保持 fp16
+- 可用 `VIDEOCAPTIONER_OPENVINO_GPU_PRECISION=f32|fp16` 覆盖
+- 失败重试顺序：`GPU` → `GPU + f32` → `CPU int8`；`NPU` 失败 → `CPU int8`
+
+实测（Core Ultra 7 155H ES / Arc iGPU / 驱动 32.0.101.9175 / OpenVINO 2026.4.1）：
+
+| 路径 | 60 秒音频耗时 | 相对实时 |
+| --- | --- | --- |
+| GPU int8 + f32 | 12.8 s | 约 4.7x |
+| GPU fp16 + f32 | 15.9 s | 约 3.8x |
+| CPU int8 | 14.2 s | 约 4.2x |
+| NPU large-v3-turbo | 不可用（`npu_kmd.sys` 看门狗 TDR） | — |
+
+在这台机器上 GPU 与 CPU 速度接近，GPU 不再是唯一选择；但 `intel_gpu` 现在可以稳定完成转写。

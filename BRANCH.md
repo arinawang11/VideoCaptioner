@@ -52,8 +52,11 @@ python -c "import openvino as ov; c=ov.Core(); print(c.available_devices)"
   - 规避 NPU 第二次调用复用旧音频状态的问题（openvino#37937）：
     首段自动检测语言后固定语言 token
   - Level0 OOM 自动重试（`DISABLE_OPENVINO_GENAI_NPU_L0=1`）→ 失败回退 GPU
+  - 推理中 NPU `DEVICE_LOST` 自动回退 Intel GPU，并复用同一 int8 模型继续转录
+  - 安装包内置 OpenVINO GPU/NPU 插件、NPU 编译器与 `large-v3-turbo-int8` 模型
   - worker 退出前显式销毁 pipeline（openvino.genai#1460）
   - UI 进程通过注册表枚举 NPU（不加载 OpenVINO，< 2ms）
+- 修复打包 dev 模式误判：安装后数据/模型统一放到 `%LOCALAPPDATA%\VideoCaptioner`
 - hf-mirror + aria2c / 并行分段下载，下载后校验大小
 - Faster-Whisper 无 NVIDIA 时自动回退 CPU、模型缺失/损坏自动补齐
 - 设置页模型列表按设备过滤、模型下载状态校验
@@ -67,3 +70,5 @@ python -c "import openvino as ov; c=ov.Core(); print(c.available_devices)"
 - 本机（Arc Pro B50）无 NPU 硬件，NPU 分支已在 GPU 上做等价路径验证；
   155H NPU 3720 按 Intel 官方支持与上述 workaround 适配。
 - 更详细的原理、模型建议和故障排查见 `docs/config/intel-arc-gpu.md`。
+- **iGPU fp16 编译器崩溃修复**：OpenVINO 设备名含 `(iGPU)` 时自动使用 `INFERENCE_PRECISION_HINT=f32`（工程样品 MTL 的 IGC 在编译 fp16 kernel 时会 `abort()`）；独显保持 fp16；失败重试 GPU -> GPU+f32 -> CPU int8
+- `intel_cpu` 设备选项（OpenVINO CPU + int8），作为不稳定 GPU 的稳定回退

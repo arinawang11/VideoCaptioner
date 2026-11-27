@@ -26,14 +26,21 @@ _IS_FROZEN = getattr(sys, "frozen", False)
 _PACKAGE_RESOURCE_PATH = _PACKAGE_DIR / "resources"
 
 # Development mode: resource/ exists next to the package
-_IS_DEV = (_PROJECT_ROOT / "resource").is_dir() and not _IS_FROZEN
+# Development mode: source checkout with resource/ next to the project metadata.
+# A packaged install can contain a stray resource/ folder inside site-packages;
+# requiring pyproject.toml keeps user data out of the installation directory.
+_IS_DEV = (
+    (_PROJECT_ROOT / "pyproject.toml").is_file()
+    and (_PROJECT_ROOT / "resource").is_dir()
+    and not _IS_FROZEN
+)
 
 if _IS_FROZEN:
     from platformdirs import user_data_path
 
     ROOT_PATH = Path(sys.executable).resolve().parent
     RESOURCE_PATH = Path(getattr(sys, "_MEIPASS")) / "resource"
-    APPDATA_PATH = user_data_path(APP_NAME)
+    APPDATA_PATH = user_data_path(APP_NAME, appauthor=False)
     WORK_PATH = Path.home() / APP_NAME
 elif _IS_DEV:
     ROOT_PATH = _PROJECT_ROOT
@@ -44,7 +51,7 @@ else:
     # Installed via pip — use platform-appropriate directories
     from platformdirs import user_data_path
 
-    ROOT_PATH = user_data_path(APP_NAME)
+    ROOT_PATH = user_data_path(APP_NAME, appauthor=False)
     RESOURCE_PATH = _PACKAGE_RESOURCE_PATH if _PACKAGE_RESOURCE_PATH.exists() else ROOT_PATH / "resource"
     APPDATA_PATH = ROOT_PATH
     WORK_PATH = Path.home() / APP_NAME
