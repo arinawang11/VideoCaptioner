@@ -373,6 +373,22 @@ class OpenVINOASR(BaseASR):
         except TypeError:
             return ov_genai.WhisperPipeline(str(model_path), device)
 
+    def _rebuild_pipeline(self):
+        """Rebuild the pipeline after a failed generate() call.
+
+        A word_timestamps attempt that dies inside the decoder leaves the
+        pipeline's internal stream state dirty; retrying on the same instance
+        produced corrupted output for the first window (missing/shifted
+        segments, timestamps starting at 30s). The compiled-kernel cache makes
+        the rebuild fast.
+        """
+        self.pipeline = None
+        gc.collect()
+        self._create_pipeline(
+            device_override=self.used_device or None,
+            precision_override=self.used_precision or None,
+        )
+
     def _create_pipeline(self, device_override=None, precision_override=None):
         import openvino_genai as ov_genai
 
@@ -568,6 +584,11 @@ class OpenVINOASR(BaseASR):
             result = self.pipeline.generate(chunk.tolist(), **config)
         except Exception as e:
             if config.get("word_timestamps") and self._word_ts_supported:
+                # An NPU DEVICE_LOST must go to the NPU fallback in _run():
+                # rebuilding an NPU pipeline after a device loss hangs until the
+                # device is reset (PnP disable/enable or reboot).
+                if _is_npu_failure(e):
+                    raise
                 # Intel GPU plugin does not support encoder attention decomposition
                 # required by word_timestamps; fall back to segment timestamps.
                 logger.warning(
@@ -577,6 +598,10 @@ class OpenVINOASR(BaseASR):
                 )
                 self._word_ts_supported = False
                 config.pop("word_timestamps", None)
+                # The failed generate() call corrupted the pipeline's internal
+                # state; retrying on it shifts/loses segments of the first
+                # window, so start from a fresh pipeline instead.
+                self._rebuild_pipeline()
                 result = self.pipeline.generate(chunk.tolist(), **config)
             else:
                 raise
