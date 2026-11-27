@@ -177,3 +177,25 @@ def test_openvino_required_files_cover_tokenizer_but_not_int8_only_config():
     assert "tokenizer.json" in required
     assert "vocab.json" in required
     assert "openvino_config.json" not in required
+
+
+def test_format_runtime_device_includes_device_name_and_precision():
+    from videocaptioner.core.asr.openvino_asr import _format_runtime_device
+
+    assert (
+        _format_runtime_device(
+            "GPU.1", "Intel(R) Arc(TM) Pro B50 Graphics (dGPU)", "fp16", ""
+        )
+        == "GPU.1 · Intel(R) Arc(TM) Pro B50 Graphics (dGPU) (fp16)"
+    )
+    assert (
+        _format_runtime_device(
+            "GPU", "Intel(R) Arc(TM) Graphics (iGPU)", "int8", "f32"
+        )
+        == "GPU · Intel(R) Arc(TM) Graphics (iGPU) (int8, f32)"
+    )
+    assert (
+        _format_runtime_device("NPU", "Intel(R) AI Boost", "int8", "")
+        == "NPU · Intel(R) AI Boost (int8)"
+    )
+    assert _format_runtime_device("CPU", "", "int8", "") == "CPU (int8)"

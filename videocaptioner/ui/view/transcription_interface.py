@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -69,9 +70,11 @@ class VideoInfoCard(CardWidget):
         self.video_info: Optional[VideoInfo] = None
         self.transcription_interface = parent
         self.selected_audio_track_index = 0  # 默认选择第一条音轨
+        self._audio_track_menu: Optional[RoundMenu] = None
 
     def setup_ui(self) -> None:
-        self.setFixedHeight(150)
+        self.setMinimumHeight(168)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setContentsMargins(20, 15, 20, 15)
         self.main_layout.setSpacing(20)
@@ -123,10 +126,36 @@ class VideoInfoCard(CardWidget):
         self.details_layout.addWidget(self.file_size_info)
         self.details_layout.addWidget(self.duration_info)
         self.details_layout.addWidget(self.audio_track_button)
-        self.details_layout.addWidget(self.progress_ring)
         self.details_layout.addStretch(1)
         self.info_layout.addLayout(self.details_layout)
-        self.main_layout.addLayout(self.info_layout)  # type: ignore
+
+        # 运行时状态区（独立成行，支持换行，避免在固定宽按钮中被裁剪）
+        self.status_layout = QHBoxLayout()
+        self.status_layout.setSpacing(8)
+        self.status_layout.setContentsMargins(0, 2, 0, 0)
+
+        self.status_label = BodyLabel("", self)
+        setFont(self.status_label, 12)
+        self.status_label.setWordWrap(True)
+        self.status_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.status_label.hide()
+
+        self.status_layout.addWidget(self.progress_ring, 0, Qt.AlignTop)  # type: ignore
+        self.status_layout.addWidget(self.status_label, 1)
+        self.info_layout.addLayout(self.status_layout)
+
+        # 实际运行设备显示（持久展示当前或本次任务选中的硬件设备）
+        self.runtime_device_label = BodyLabel("", self)
+        setFont(self.runtime_device_label, 12)
+        self.runtime_device_label.setWordWrap(True)
+        self.runtime_device_label.setStyleSheet("color: #0078D4;")
+        self.runtime_device_label.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self.runtime_device_label.hide()
+        self.info_layout.addWidget(self.runtime_device_label)
+
+        self.main_layout.addLayout(self.info_layout, 1)  # type: ignore
 
     def create_pill_button(self, text: str, width: int) -> PillPushButton:
         button = PillPushButton(text, self)
@@ -152,7 +181,11 @@ class VideoInfoCard(CardWidget):
 
     def update_info(self, video_info: VideoInfo) -> None:
         """更新视频信息显示"""
-        self.reset_ui()
+        is_processing = bool(
+            self.transcription_interface and self.transcription_interface.is_processing  # type: ignore
+        )
+        if not is_processing:
+            self.reset_ui()
         self.video_info = video_info
 
         self.video_title.setText(video_info.file_name.rsplit(".", 1)[0])
@@ -167,7 +200,7 @@ class VideoInfoCard(CardWidget):
         # 更新音轨选择按钮
         self.update_audio_tracks(video_info)
 
-        if self.transcription_interface and self.transcription_interface.is_processing:  # type: ignore
+        if is_processing:
             self.start_button.setEnabled(False)
         else:
             self.start_button.setEnabled(True)
@@ -200,16 +233,11 @@ class VideoInfoCard(CardWidget):
                 )
                 menu.addAction(action)
 
-            # 绑定菜单到按钮
-            self.audio_track_button.clicked.connect(
-                lambda: menu.exec(
-                    self.audio_track_button.mapToGlobal(
-                        self.audio_track_button.rect().bottomLeft()
-                    )
-                )
-            )
+            # 保存菜单引用，避免重复 connect 导致弹出多个菜单
+            self._audio_track_menu = menu
             self.audio_track_button.show()
         else:
+            self._audio_track_menu = None
             self.audio_track_button.hide()
             self.selected_audio_track_index = 0
 
@@ -255,11 +283,24 @@ class VideoInfoCard(CardWidget):
     def setup_signals(self) -> None:
         self.start_button.clicked.connect(self.on_start_button_clicked)
         self.open_folder_button.clicked.connect(self.on_open_folder_clicked)
+        self.audio_track_button.clicked.connect(self._show_audio_track_menu)
+
+    def _show_audio_track_menu(self) -> None:
+        if self._audio_track_menu is not None:
+            self._audio_track_menu.exec(
+                self.audio_track_button.mapToGlobal(
+                    self.audio_track_button.rect().bottomLeft()
+                )
+            )
 
     def on_start_button_clicked(self):
         """开始转录按钮点击事件"""
         self.progress_ring.setValue(0)
         self.progress_ring.show()
+        self.status_label.setText(self.tr("正在准备转录..."))
+        self.status_label.setToolTip(self.status_label.text())
+        self.status_label.show()
+        self.start_button.setText(self.tr("转录中"))
         self.start_button.setDisabled(True)
         self.start_transcription()
 
@@ -285,6 +326,12 @@ class VideoInfoCard(CardWidget):
         """开始转录过程"""
         self.transcription_interface.is_processing = True  # type: ignore
         self.start_button.setEnabled(False)
+        self.start_button.setText(self.tr("转录中"))
+        self.progress_ring.setValue(0)
+        self.progress_ring.show()
+        self.status_label.setText(self.tr("正在准备转录..."))
+        self.status_label.setToolTip(self.status_label.text())
+        self.status_label.show()
 
         if need_create_task:
             self.task = TaskFactory.create_transcribe_task(self.video_info.file_path)
@@ -298,13 +345,41 @@ class VideoInfoCard(CardWidget):
         self.transcript_thread = TranscriptThread(self.task)
         self.transcript_thread.finished.connect(self.on_transcript_finished)
         self.transcript_thread.progress.connect(self.on_transcript_progress)
+        self.transcript_thread.device_changed.connect(self.on_runtime_device_changed)
         self.transcript_thread.error.connect(self.on_transcript_error)
         self.transcript_thread.start()
 
+    def _sync_label_height(self, label: BodyLabel) -> None:
+        """Ensure wrapped labels keep enough vertical space without clipping."""
+        width = max(label.width(), 320)
+        if label.hasHeightForWidth():
+            h = label.heightForWidth(width)
+        else:
+            h = label.sizeHint().height()
+        label.setMinimumHeight(max(h + 2, 20))
+        self.updateGeometry()
+
+    def on_runtime_device_changed(self, device_label: str):
+        """更新实际运行设备显示"""
+        if not device_label:
+            return
+        text = self.tr("实际设备：") + device_label
+        self.runtime_device_label.setText(text)
+        self.runtime_device_label.setToolTip(text)
+        self.runtime_device_label.show()
+        self._sync_label_height(self.runtime_device_label)
+
     def on_transcript_progress(self, value, message):
         """更新转录进度"""
-        self.start_button.setText(message)
-        self.progress_ring.setValue(value)
+        progress = max(0, min(100, int(value)))
+        self.progress_ring.setValue(progress)
+        self.progress_ring.show()
+        status_text = f"{message} ({progress}%)" if message else f"{progress}%"
+        self.status_label.setText(status_text)
+        self.status_label.setToolTip(status_text)
+        self.status_label.show()
+        self._sync_label_height(self.status_label)
+        self.start_button.setText(self.tr(f"转录中 {progress}%"))
 
     def on_transcript_error(self, error):
         """处理转录错误"""
@@ -312,6 +387,12 @@ class VideoInfoCard(CardWidget):
         self.start_button.setEnabled(True)
         self.start_button.setText(self.tr("重新转录"))
         self.progress_ring.hide()
+        first_line = str(error or "").strip().splitlines()[0] if error else ""
+        err_summary = self.tr("转录失败") + (f"：{first_line}" if first_line else "")
+        self.status_label.setText(err_summary)
+        self.status_label.setToolTip(str(error))
+        self.status_label.show()
+        self._sync_label_height(self.status_label)
         InfoBar.error(
             self.tr("转录失败"),
             self.tr(error),
@@ -324,6 +405,9 @@ class VideoInfoCard(CardWidget):
         self.start_button.setEnabled(True)
         self.start_button.setText(self.tr("转录完成"))
         self.progress_ring.hide()
+        self.status_label.setText(self.tr("转录完成"))
+        self.status_label.setToolTip(self.tr("转录完成"))
+        self.status_label.show()
         self.finished.emit(task)
 
     def reset_ui(self):
@@ -332,6 +416,10 @@ class VideoInfoCard(CardWidget):
         self.start_button.setText(self.tr("开始转录"))
         self.progress_ring.setValue(0)
         self.progress_ring.hide()
+        self.status_label.setText("")
+        self.status_label.hide()
+        self.runtime_device_label.setText("")
+        self.runtime_device_label.hide()
 
     def set_task(self, task):
         """设置任务并更新UI"""
@@ -369,11 +457,11 @@ class TranscriptionInterface(QWidget):
         self._setup_command_bar()
 
         self.video_info_card = VideoInfoCard(self)
-        self.main_layout.addWidget(self.video_info_card)
+        self.main_layout.addWidget(self.video_info_card, 0)
 
         # 添加转录设置卡片
         self.transcription_setting_card = TranscriptionSettingCard(self)
-        self.main_layout.addWidget(self.transcription_setting_card)
+        self.main_layout.addWidget(self.transcription_setting_card, 1)
 
     def _setup_command_bar(self):
         """设置命令栏"""

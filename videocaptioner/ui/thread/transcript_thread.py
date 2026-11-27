@@ -5,7 +5,12 @@ from pathlib import Path
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from videocaptioner.core.asr import transcribe
-from videocaptioner.core.entities import TranscribeOutputFormatEnum, TranscribeTask
+from videocaptioner.core.entities import (
+    TranscribeModelEnum,
+    TranscribeOutputFormatEnum,
+    TranscribeTask,
+)
+from videocaptioner.core.utils.hardware import preferred_backend_device
 from videocaptioner.core.utils.logger import setup_logger
 from videocaptioner.core.utils.video_utils import video2audio
 
@@ -15,6 +20,7 @@ logger = setup_logger("transcript_thread")
 class TranscriptThread(QThread):
     finished = pyqtSignal(TranscribeTask)
     progress = pyqtSignal(int, str)
+    device_changed = pyqtSignal(str)
     error = pyqtSignal(str)
 
     def __init__(self, task: TranscribeTask):
@@ -106,6 +112,7 @@ class TranscriptThread(QThread):
 
             self.progress.emit(20, self.tr("语音转录中"))
             logger.info("开始语音转录")
+            self._emit_initial_device()
 
             # 进行转录
             asr_data = transcribe(
@@ -144,6 +151,32 @@ class TranscriptThread(QThread):
         finally:
             Path(temp_audio_path).unlink(missing_ok=True)
 
+    def _emit_initial_device(self):
+        """Emit the configured/initial runtime device before worker updates arrive."""
+        cfg_obj = self.task.transcribe_config
+        if not cfg_obj or not cfg_obj.transcribe_model:
+            return
+        model_type = cfg_obj.transcribe_model
+        if model_type == TranscribeModelEnum.FASTER_WHISPER:
+            dev = (cfg_obj.faster_whisper_device or "auto").strip()
+            if dev.lower() in ("auto", ""):
+                dev = preferred_backend_device()
+            if dev.lower().startswith("intel"):
+                self.device_changed.emit(f"OpenVINO ({dev}，正在探测实际设备...)")
+            else:
+                self.device_changed.emit(f"FasterWhisper ({dev})")
+        elif model_type == TranscribeModelEnum.WHISPER_CPP:
+            self.device_changed.emit("WhisperCpp (本地)")
+        else:
+            self.device_changed.emit(f"{model_type.value} (云端)")
+
     def progress_callback(self, value, message):
         progress = min(20 + (value * 0.8), 100)
-        self.progress.emit(int(progress), message)
+        text = str(message or "")
+        if text.startswith("设备: "):
+            device_label = text[len("设备: ") :].strip()
+            if device_label:
+                self.device_changed.emit(device_label)
+            self.progress.emit(int(progress), f"正在转录 ({device_label})")
+            return
+        self.progress.emit(int(progress), text)

@@ -69,6 +69,7 @@ class OpenVINOProcessASR(BaseASR):
         self.language = language
         self.device = device
         self.need_word_time_stamp = need_word_time_stamp
+        self.active_device_label = ""
 
     def _build_command(
         self,
@@ -144,6 +145,12 @@ class OpenVINOProcessASR(BaseASR):
             if line.startswith("PROGRESS "):
                 try:
                     value, message = line[len("PROGRESS ") :].split("|", 1)
+                    if message.startswith("设备: "):
+                        self.active_device_label = message[len("设备: ") :].strip()
+                        logger.info(
+                            "OpenVINO active runtime device: %s",
+                            self.active_device_label,
+                        )
                     callback(int(float(value)), message)
                 except Exception:
                     pass

@@ -71,6 +71,48 @@ def _is_npu_device(device: str) -> bool:
     return (device or "").strip().upper().startswith("NPU")
 
 
+def _openvino_device_full_name(device: str) -> str:
+    """Resolve OpenVINO's FULL_DEVICE_NAME for ``device`` (best-effort)."""
+    try:
+        from ..utils.hardware import list_openvino_devices
+
+        mapping = dict(list_openvino_devices())
+        if device in mapping:
+            return mapping[device]
+    except Exception:
+        pass
+    try:
+        import openvino as ov
+
+        return str(ov.Core().get_property(device, "FULL_DEVICE_NAME"))
+    except Exception:
+        return ""
+
+
+def _format_runtime_device(
+    device: str,
+    full_name: str = "",
+    precision: str = "",
+    precision_hint: str = "",
+) -> str:
+    """Format a human-readable runtime device label for logs and UI."""
+    base = device or "AUTO"
+    name = (full_name or "").strip()
+    if name and name.lower() != base.lower():
+        label = f"{base} · {name}"
+    else:
+        label = base
+
+    tags: List[str] = []
+    if precision:
+        tags.append(precision)
+    if precision_hint and precision_hint != precision:
+        tags.append(precision_hint)
+    if tags:
+        label = f"{label} ({', '.join(tags)})"
+    return label
+
+
 def _gpu_precision_hint(device: str, explicit: str = "") -> str:
     """Choose an ``INFERENCE_PRECISION_HINT`` for the target device.
 
@@ -348,7 +390,10 @@ class OpenVINOASR(BaseASR):
         self.need_word_time_stamp = need_word_time_stamp
         self.pipeline = None
         self.used_device = ""
+        self.used_device_name = ""
         self.used_precision = "fp16"
+        self.used_precision_hint = ""
+        self.used_device_label = ""
         self._word_ts_supported = True
         self._npu_detected_language = ""
         self._callback: Optional[Callable[[int, str], None]] = None
@@ -389,6 +434,18 @@ class OpenVINOASR(BaseASR):
             device_override=self.used_device or None,
             precision_override=self.used_precision or None,
         )
+
+    def _record_runtime_device(
+        self, device: str, precision: str, precision_hint: str
+    ) -> None:
+        self.used_device = device
+        self.used_device_name = _openvino_device_full_name(device)
+        self.used_precision = precision
+        self.used_precision_hint = precision_hint
+        self.used_device_label = _format_runtime_device(
+            device, self.used_device_name, precision, precision_hint
+        )
+        logger.info("Active OpenVINO runtime device: %s", self.used_device_label)
 
     def _create_pipeline(self, device_override=None, precision_override=None):
         import openvino_genai as ov_genai
@@ -487,8 +544,7 @@ class OpenVINOASR(BaseASR):
                         first_err = second_err
                     else:
                         self.pipeline = pipeline
-                        self.used_device = device
-                        self.used_precision = precision
+                        self._record_runtime_device(device, precision, precision_hint)
                         return pipeline
 
                 fallback = resolve_openvino_device("intel_gpu")
@@ -496,6 +552,11 @@ class OpenVINOASR(BaseASR):
                     "NPU failed (%s), falling back to %s", first_err, fallback
                 )
                 device = fallback
+                precision_hint = _gpu_precision_hint(device, self.precision_hint)
+                if precision_hint:
+                    properties["INFERENCE_PRECISION_HINT"] = precision_hint
+                else:
+                    properties.pop("INFERENCE_PRECISION_HINT", None)
                 pipeline = self._construct_pipeline(
                     ov_genai, model_path, device, properties
                 )
@@ -503,8 +564,7 @@ class OpenVINOASR(BaseASR):
                 raise
 
         self.pipeline = pipeline
-        self.used_device = device
-        self.used_precision = precision
+        self._record_runtime_device(device, precision, precision_hint)
         return pipeline
 
     def _download_progress(self, percent: int, message: str):
@@ -698,7 +758,7 @@ class OpenVINOASR(BaseASR):
         self._create_pipeline(
             device_override="intel_gpu", precision_override="int8"
         )
-        callback(21, f"transcribing on {self.used_device} ({self.used_precision})")
+        callback(21, f"设备: {self.used_device_label}")
         return self._transcribe_gpu(audio, callback)
 
     def _run(self, callback=None, **kwargs) -> str:
@@ -721,7 +781,7 @@ class OpenVINOASR(BaseASR):
         try:
             callback(1, "initializing OpenVINO")
             self._create_pipeline()
-            callback(20, f"transcribing on {self.used_device} ({self.used_precision})")
+            callback(20, f"设备: {self.used_device_label}")
 
             audio = _read_wav_mono_16k(self.audio_input)
             total_samples = len(audio)

@@ -354,8 +354,10 @@ class BatchProcessInterface(QWidget):
                 # 更新进度条
                 progress_bar = self.task_table.cellWidget(row, 1)
                 progress_bar.setValue(progress)
-                # 更新状态
-                self.task_table.item(row, 2).setText(status)
+                # 更新状态（同时设置 tooltip，避免单元格过窄时看不全）
+                status_item = self.task_table.item(row, 2)
+                status_item.setText(status)
+                status_item.setToolTip(status)
                 break
 
     def on_task_error(self, file_path: str, error: str):

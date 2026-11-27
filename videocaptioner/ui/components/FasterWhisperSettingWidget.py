@@ -7,6 +7,7 @@ from PyQt5.QtGui import QShowEvent
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
+    QSizePolicy,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -40,8 +41,12 @@ from videocaptioner.core.entities import (
 from videocaptioner.core.utils.hardware import describe_hardware
 from videocaptioner.core.utils.model_downloader import (
     FASTER_WHISPER_REPOS,
+    OPENVINO_WHISPER_INT8_REPOS,
+    OPENVINO_WHISPER_REPOS,
     faster_whisper_model_dir,
     faster_whisper_model_status,
+    openvino_model_files_complete,
+    openvino_whisper_model_dir,
 )
 from videocaptioner.core.utils.platform_utils import open_folder
 from videocaptioner.ui.common.config import cfg
@@ -191,18 +196,32 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
     def __init__(self, parent=None, setting_widget=None):
         super().__init__(parent)
-        self.widget.setMinimumWidth(600)
+        self.widget.setMinimumWidth(620)
         self.program_download_thread = None
         self.model_download_thread = None
+        self.setting_widget = setting_widget
         self._setup_ui()
         self._connect_signals()
-        self.setting_widget = setting_widget
+
+    @staticmethod
+    def _current_device() -> str:
+        return str(cfg.faster_whisper_device.value or "").strip().lower()
+
+    def _is_intel_mode(self) -> bool:
+        return self._current_device().startswith("intel")
+
+    def _openvino_precision_for_device(self) -> str:
+        dev = self._current_device()
+        if dev.startswith(("intel_npu", "intel_cpu")):
+            return "int8"
+        return "fp16"
 
     def _setup_ui(self):
         """设置UI"""
         layout = QVBoxLayout()
-        self._setup_program_section(layout)
-        layout.addSpacing(20)
+        if not self._is_intel_mode():
+            self._setup_program_section(layout)
+            layout.addSpacing(20)
         self._setup_model_section(layout)
         self._setup_progress_section(layout)
 
@@ -275,7 +294,12 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         title_layout = QHBoxLayout()
 
         # 标题
-        model_title = SubtitleLabel(self.tr("模型下载"), self)
+        model_title_text = (
+            self.tr("OpenVINO 模型下载")
+            if self._is_intel_mode()
+            else self.tr("模型下载")
+        )
+        model_title = SubtitleLabel(model_title_text, self)
         title_layout.addWidget(model_title)
 
         # 添加打开文件夹按钮
@@ -288,14 +312,19 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         layout.addLayout(title_layout)
         layout.addSpacing(8)
 
-        hint = BodyLabel(
-            self.tr(
+        if self._is_intel_mode():
+            precision = self._openvino_precision_for_device()
+            hint_text = self.tr(
+                f"当前运行设备：{self._current_device()}（OpenVINO，默认 {precision} 模型）。"
+                "可在此提前下载，或在首次转录时由程序自动按需拉取。"
+            )
+        else:
+            hint_text = self.tr(
                 "提示：Intel GPU 用户请把“运行设备”设为 intel_gpu；"
                 "Intel AI Boost NPU（如酷睿 Ultra 7 155H）设为 intel_npu。"
-                "OpenVINO 模型会在首次转录时自动下载（NPU 设备自动使用 INT8 模型）。"
-            ),
-            self,
-        )
+                "OpenVINO 模型会在首次转录时自动按需下载。"
+            )
+        hint = BodyLabel(hint_text, self)
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -346,6 +375,7 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         """设置进度显示部分UI"""
         self.progress_bar = ProgressBar(self)
         self.progress_label = BodyLabel("", self)
+        self.progress_label.setWordWrap(True)
         self.progress_bar.hide()
         self.progress_label.hide()
 
@@ -370,20 +400,43 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         size_item.setTextAlignment(Qt.AlignCenter)  # type: ignore
         self.model_table.setItem(row, 1, size_item)
 
-        # 状态 - 校验 model.bin 的大小，避免把损坏的下载显示成“已下载”
+        # 状态
         model_name = model["value"].replace("faster-whisper-", "")
-        is_downloaded, status_reason = faster_whisper_model_status(MODEL_PATH, model_name)
-        if is_downloaded:
-            status_text = self.tr("已下载")
-        elif status_reason and "unexpected size" in status_reason:
-            status_text = self.tr("文件损坏")
+        if self._is_intel_mode():
+            precision = self._openvino_precision_for_device()
+            target_dir = openvino_whisper_model_dir(
+                MODEL_PATH, model_name, precision=precision
+            )
+            int8_dir = openvino_whisper_model_dir(
+                MODEL_PATH, model_name, precision="int8"
+            )
+            if openvino_model_files_complete(target_dir):
+                is_downloaded = True
+                status_text = self.tr("已下载")
+            elif precision == "fp16" and openvino_model_files_complete(int8_dir):
+                is_downloaded = True
+                status_text = self.tr("已下载(int8)")
+            elif target_dir.exists() and any(target_dir.iterdir()):
+                is_downloaded = False
+                status_text = self.tr("不完整")
+            else:
+                is_downloaded = False
+                status_text = self.tr("未下载")
         else:
-            status_text = self.tr("未下载")
+            is_downloaded, status_reason = faster_whisper_model_status(
+                MODEL_PATH, model_name
+            )
+            if is_downloaded:
+                status_text = self.tr("已下载")
+            elif status_reason and "unexpected size" in status_reason:
+                status_text = self.tr("文件损坏")
+            else:
+                status_text = self.tr("未下载")
 
         status_item = QTableWidgetItem(status_text)
         if is_downloaded:
             status_item.setForeground(Qt.green)  # type: ignore
-        elif status_text == self.tr("文件损坏"):
+        elif status_text in (self.tr("文件损坏"), self.tr("不完整")):
             status_item.setForeground(Qt.red)  # type: ignore
         status_item.setTextAlignment(Qt.AlignCenter)  # type: ignore
         self.model_table.setItem(row, 2, status_item)
@@ -549,13 +602,28 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
         if download_btn:
             download_btn.setEnabled(False)
 
-        # 创建并启动下载线程（hf-mirror + aria2c，下载后校验大小）
+        # 创建并启动下载线程（hf-mirror + aria2c，下载后校验）
         model_name = model["value"].replace("faster-whisper-", "")
-        repo_id = FASTER_WHISPER_REPOS.get(model_name, ("", 0))[0]
+        if self._is_intel_mode():
+            precision = self._openvino_precision_for_device()
+            repos = (
+                OPENVINO_WHISPER_INT8_REPOS
+                if precision == "int8"
+                else OPENVINO_WHISPER_REPOS
+            )
+            repo_id = repos.get(model_name, "")
+            save_dir = openvino_whisper_model_dir(
+                MODEL_PATH, model_name, precision=precision
+            )
+            label = f"OpenVINO {model_name} ({precision})"
+        else:
+            repo_id = FASTER_WHISPER_REPOS.get(model_name, ("", 0))[0]
+            save_dir = faster_whisper_model_dir(MODEL_PATH, model_name)
+            label = f"Faster-Whisper {model_name}"
         self.model_download_thread = HfModelDownloadThread(
             repo_id,
-            faster_whisper_model_dir(MODEL_PATH, model_name),
-            label=f"Faster-Whisper {model_name}",
+            save_dir,
+            label=label,
         )
 
         def _on_model_download_progress(value, msg):
@@ -626,15 +694,13 @@ class FasterWhisperDownloadDialog(MessageBoxBase):
 
     def _open_model_folder(self):
         """打开模型文件夹"""
-        if os.path.exists(MODEL_PATH):
-            # 根据操作系统打开文件夹
-            open_folder(str(MODEL_PATH))
+        Path(MODEL_PATH).mkdir(parents=True, exist_ok=True)
+        open_folder(str(MODEL_PATH))
 
     def _open_program_folder(self):
         """打开程序文件夹"""
-        if os.path.exists(BIN_PATH):
-            # 根据操作系统打开文件夹
-            open_folder(str(BIN_PATH))
+        Path(BIN_PATH).mkdir(parents=True, exist_ok=True)
+        open_folder(str(BIN_PATH))
 
     def _finish_program_installation(self):
         """完成程序安装"""
@@ -735,18 +801,26 @@ class FasterWhisperSettingWidget(QWidget):
             cfg.faster_whisper_device,
             FIF.IOT,
             self.tr("运行设备"),
-            self.tr(
-                "cuda: NVIDIA 显卡；intel_gpu: Intel Arc（A/B 系列）/核显；"
-                "intel_cpu: Intel CPU（OpenVINO，稳定回退）；"
-                "intel_npu: Intel AI Boost NPU（酷睿 Ultra，如 155H）；cpu: 处理器\n"
-                f"检测结果：{describe_hardware()}"
-            ),
+            self._build_device_description(),
             ["cuda", "cpu", "intel_gpu", "intel_cpu", "intel_npu"],
             self.setting_group,
         )
-        self.device_card.comboBox.currentTextChanged.connect(
-            lambda _text: self._refresh_model_combo()
+        self.device_card.contentLabel.setWordWrap(True)
+        self.device_card.contentLabel.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Minimum
         )
+        self.device_card.hBoxLayout.setStretch(2, 1)
+        self.device_card.hBoxLayout.setStretch(4, 0)
+        self.device_card.vBoxLayout.setAlignment(
+            self.device_card.contentLabel, Qt.Alignment()  # type: ignore
+        )
+        self.device_card.setMinimumHeight(88)
+        self.device_card.setMaximumHeight(16777215)
+        self.device_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.device_card.contentLabel.setToolTip(
+            self.device_card.contentLabel.text()
+        )
+        self.device_card.comboBox.currentTextChanged.connect(self._on_device_changed)
         # _, available_devices = check_faster_whisper_exists()
         # if "GPU" not in available_devices:
         #     self.device_card.comboBox.removeItem(0)
@@ -854,6 +928,24 @@ class FasterWhisperSettingWidget(QWidget):
 
     def _is_intel_device(self) -> bool:
         return str(cfg.faster_whisper_device.value).lower().startswith("intel")
+
+    def _build_device_description(self, selected: str = "") -> str:
+        choice = (selected or str(cfg.faster_whisper_device.value or "")).strip().lower()
+        hints = {
+            "intel_gpu": self.tr("当前选择：Intel GPU（OpenVINO，优先 Arc 独显，核显自动用 f32）"),
+            "intel_npu": self.tr("当前选择：Intel AI Boost NPU（OpenVINO int8，无 NPU 时自动回退 GPU）"),
+            "intel_cpu": self.tr("当前选择：Intel CPU（OpenVINO int8，稳定回退）"),
+            "cuda": self.tr("当前选择：NVIDIA CUDA（无 NVIDIA 显卡时自动回退 CPU）"),
+            "cpu": self.tr("当前选择：CPU（Faster-Whisper）"),
+        }
+        line1 = hints.get(choice, self.tr("选择本地语音识别所使用的计算设备"))
+        line2 = self.tr(f"本机检测：{describe_hardware()}")
+        return f"{line1}\n{line2}"
+
+    def _on_device_changed(self, text: str):
+        self.device_card.setContent(self._build_device_description(text))
+        self.device_card.contentLabel.setToolTip(self.device_card.contentLabel.text())
+        self._refresh_model_combo()
 
     def _refresh_model_combo(self):
         """根据运行设备刷新可选模型列表"""
