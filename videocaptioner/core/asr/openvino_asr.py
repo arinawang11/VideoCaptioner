@@ -584,6 +584,11 @@ class OpenVINOASR(BaseASR):
             result = self.pipeline.generate(chunk.tolist(), **config)
         except Exception as e:
             if config.get("word_timestamps") and self._word_ts_supported:
+                # An NPU DEVICE_LOST must go to the NPU fallback in _run():
+                # rebuilding an NPU pipeline after a device loss hangs until the
+                # device is reset (PnP disable/enable or reboot).
+                if _is_npu_failure(e):
+                    raise
                 # Intel GPU plugin does not support encoder attention decomposition
                 # required by word_timestamps; fall back to segment timestamps.
                 logger.warning(
