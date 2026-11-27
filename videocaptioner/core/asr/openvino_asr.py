@@ -373,13 +373,12 @@ class OpenVINOASR(BaseASR):
         model_dir: Optional[str] = None,
         language: str = "en",
         device: str = "intel_gpu",
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
         precision: str = "",
         precision_hint: str = "",
         gpu_name: str = "",
     ):
-        super().__init__(audio_input, use_cache, need_word_time_stamp)
+        super().__init__(audio_input, need_word_time_stamp)
         if whisper_model not in OPENVINO_WHISPER_REPOS:
             raise RuntimeError(f"Unsupported OpenVINO model: {whisper_model}")
         self.model_name = whisper_model
@@ -849,9 +848,3 @@ class OpenVINOASR(BaseASR):
                 continue
             filtered.append(seg)
         return filtered
-
-    def _get_key(self):
-        return (
-            f"{self.crc32_hex}-openvino-{self.model_name}-{self.device}"
-            f"-{self.language}-{int(self.need_word_time_stamp)}"
-        )

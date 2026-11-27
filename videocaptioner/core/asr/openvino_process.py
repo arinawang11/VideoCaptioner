@@ -62,10 +62,9 @@ class OpenVINOProcessASR(BaseASR):
         device: str = "intel_gpu",
         precision: str = "",
         gpu_name: str = "",
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
     ):
-        super().__init__(audio_input, use_cache, need_word_time_stamp)
+        super().__init__(audio_input, need_word_time_stamp)
         self.model_name = whisper_model
         self.model_dir = Path(model_dir) if model_dir else Path(MODEL_PATH)
         self.language = language
@@ -262,10 +261,3 @@ class OpenVINOProcessASR(BaseASR):
                 continue
             filtered.append(seg)
         return filtered
-
-    def _get_key(self):
-        prec_tag = f"-{self.precision}" if self.precision else ""
-        return (
-            f"{self.crc32_hex}-openvino-process-{self.model_name}-{self.device}"
-            f"{prec_tag}-{self.language}-{int(self.need_word_time_stamp)}"
-        )

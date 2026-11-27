@@ -1,4 +1,3 @@
-import hashlib
 import os
 import re
 import shutil
@@ -44,7 +43,6 @@ class FasterWhisperASR(BaseASR):
         device: str = "cpu",
         output_dir: Optional[str] = None,
         output_format: str = "srt",
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
         # VAD 相关参数
         vad_filter: bool = True,
@@ -61,7 +59,7 @@ class FasterWhisperASR(BaseASR):
         max_comma_cent: int = 50,
         prompt: Optional[str] = None,
     ):
-        super().__init__(audio_input, use_cache)
+        super().__init__(audio_input, need_word_time_stamp)
 
         # 基本参数
         self.model_path = whisper_model
@@ -368,12 +366,6 @@ class FasterWhisperASR(BaseASR):
             callback(*ASRStatus.COMPLETED.callback_tuple())
 
             return output_path.read_text(encoding="utf-8")
-
-    def _get_key(self):
-        """获取缓存key"""
-        cmd = self._build_command("")
-        cmd_hash = hashlib.md5(str(cmd).encode()).hexdigest()
-        return f"{self.crc32_hex}-{cmd_hash}"
 
 
 def is_rtx_50_series() -> bool:

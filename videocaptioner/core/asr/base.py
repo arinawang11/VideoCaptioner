@@ -4,11 +4,10 @@ import time
 import uuid
 import zlib
 from io import BytesIO
-from typing import Callable, Optional, Union, cast
+from typing import Callable, Optional, Union
 
 from pydub import AudioSegment
 
-from videocaptioner.core.utils.cache import get_asr_cache, is_cache_enabled
 from videocaptioner.core.utils.logger import setup_logger
 
 from .asr_data import ASRData, ASRDataSeg
@@ -22,9 +21,11 @@ class BaseASR:
     Provides common functionality including:
     - Audio file loading and validation
     - CRC32-based file identification
-    - Disk caching with automatic key generation
     - Template method pattern for subclass implementation
     - Rate limiting for public charity services
+
+    Transcription results are never cached: re-running the same audio always
+    performs a fresh recognition, which keeps debugging reproducible.
     """
 
     SUPPORTED_SOUND_FORMAT = ["flac", "m4a", "mp3", "wav"]
@@ -37,21 +38,17 @@ class BaseASR:
     def __init__(
         self,
         audio_input: Optional[Union[str, bytes]] = None,
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
     ):
         """Initialize ASR with audio data.
 
         Args:
             audio_input: Path to audio file or raw audio bytes
-            use_cache: Whether to cache recognition results
             need_word_time_stamp: Whether to return word-level timestamps
         """
         self.audio_input = audio_input
         self.file_binary = None
-        self.use_cache = use_cache
         self._set_data()
-        self._cache = get_asr_cache()
         self.audio_duration = self._get_audio_duration()
 
     def _set_data(self):
@@ -87,7 +84,7 @@ class BaseASR:
     def run(
         self, callback: Optional[Callable[[int, str], None]] = None, **kwargs
     ) -> ASRData:
-        """Run ASR with caching support.
+        """Run ASR.
 
         Args:
             callback: Optional progress callback(progress: int, message: str)
@@ -96,39 +93,12 @@ class BaseASR:
         Returns:
             ASRData: Recognition results with segments
         """
-        cache_key = f"{self.__class__.__name__}:{self._get_key()}"
-
-        # Try cache first
-        if self.use_cache and is_cache_enabled():
-            cached_result = cast(
-                Optional[dict], self._cache.get(cache_key, default=None)
-            )
-            if cached_result is not None:
-                logger.debug("找到缓存，直接返回")
-                segments = self._make_segments(cached_result)
-                return ASRData(segments)
-
-        # Run ASR
+        # Always transcribe from scratch (no result caching) so repeated tests
+        # of the same file exercise the real ASR pipeline every time.
         resp_data = self._run(callback, **kwargs)
-
-        # Cache result (与读侧条件保持一致；worker 进程 use_cache=False，
-        # 之前无条件写导致每次转录都留下一条永不被读的死缓存)
-        if self.use_cache and is_cache_enabled():
-            self._cache.set(cache_key, resp_data, expire=86400 * 2)
 
         segments = self._make_segments(resp_data)
         return ASRData(segments)
-
-    def _get_key(self) -> str:
-        """Get cache key for this ASR request.
-
-        Default implementation uses file CRC32.
-        Subclasses can override to include additional parameters.
-
-        Returns:
-            Cache key string
-        """
-        return self.crc32_hex
 
     def _make_segments(self, resp_data: dict) -> list[ASRDataSeg]:
         """Convert ASR response to segment list.

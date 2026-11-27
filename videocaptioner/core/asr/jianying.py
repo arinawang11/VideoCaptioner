@@ -25,12 +25,11 @@ class JianYingASR(BaseASR):
     def __init__(
         self,
         audio_input: Union[str, bytes],
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
         start_time: float = 0,
         end_time: float = 6000,
     ):
-        super().__init__(audio_input, use_cache)
+        super().__init__(audio_input, need_word_time_stamp)
         self.audio_input = audio_input
         self.end_time = end_time
         self.start_time = start_time
@@ -141,9 +140,6 @@ class JianYingASR(BaseASR):
                 ASRDataSeg(u["text"], u["start_time"], u["end_time"])
                 for u in resp_data["data"]["utterances"]
             ]
-
-    def _get_key(self):
-        return f"{self.__class__.__name__}-{self.crc32_hex}-{self.need_word_time_stamp}"
 
     def _get_tid(self):
         i = str(datetime.datetime.now().year)[3]

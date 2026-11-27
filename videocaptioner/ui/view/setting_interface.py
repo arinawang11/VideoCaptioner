@@ -207,7 +207,9 @@ class SettingInterface(ScrollArea):
         self.cacheEnabledCard = SwitchSettingCard(
             FIF.HISTORY,
             self.tr("启用缓存"),
-            self.tr("相同配置下会复用之前的 ASR 和 LLM 结果；关闭缓存后每次重新生成"),
+            self.tr(
+                "相同配置下会复用之前的翻译 / 配音结果；转录始终重新执行，不受此开关影响"
+            ),
             cfg.cache_enabled,
             self.personalGroup,
         )
@@ -799,7 +801,7 @@ class SettingInterface(ScrollArea):
             enable_cache()
             InfoBar.success(
                 self.tr("缓存已启用"),
-                self.tr("ASR、翻译等操作将优先使用缓存"),
+                self.tr("翻译、配音等操作将优先使用缓存（转录始终重新执行）"),
                 duration=INFOBAR_DURATION_SUCCESS,
                 parent=self,
             )
@@ -807,7 +809,7 @@ class SettingInterface(ScrollArea):
             disable_cache()
             InfoBar.warning(
                 self.tr("缓存已禁用"),
-                self.tr("所有操作将重新生成，不使用缓存（建议开启缓存）"),
+                self.tr("翻译、配音等操作将重新生成（转录始终重新执行）"),
                 duration=INFOBAR_DURATION_WARNING,
                 parent=self,
             )

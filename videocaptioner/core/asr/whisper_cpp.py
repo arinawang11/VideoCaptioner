@@ -30,10 +30,9 @@ class WhisperCppASR(BaseASR):
         language="en",
         whisper_cpp_path=None,
         whisper_model=None,
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
     ):
-        super().__init__(audio_input, use_cache)
+        super().__init__(audio_input, need_word_time_stamp)
 
         if isinstance(audio_input, str):
             assert os.path.exists(audio_input), f"Audio file not found: {audio_input}"
@@ -233,9 +232,6 @@ class WhisperCppASR(BaseASR):
                         self.process.kill()
                         self.process.wait()
                 raise RuntimeError(f"SRT generation failed: {str(e)}")
-
-    def _get_key(self):
-        return f"{self.crc32_hex}-{self.need_word_time_stamp}-{self.model_path}-{self.language}"
 
     def get_audio_duration(self, filepath: str) -> int:
         """Get audio file duration in seconds using ffmpeg."""

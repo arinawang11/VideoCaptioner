@@ -42,13 +42,12 @@ class MockASR(BaseASR):
     def __init__(
         self,
         audio_input,
-        use_cache: bool = False,
         need_word_time_stamp: bool = False,
         # Mock 专用参数
         mock_text_per_second: str = "Mock",
         fail_on_run: bool = False,
     ):
-        super().__init__(audio_input, use_cache, need_word_time_stamp)
+        super().__init__(audio_input, need_word_time_stamp)
         self.mock_text_per_second = mock_text_per_second
         self.fail_on_run = fail_on_run
 

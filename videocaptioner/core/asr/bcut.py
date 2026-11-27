@@ -31,10 +31,9 @@ class BcutASR(BaseASR):
     def __init__(
         self,
         audio_input: Union[str, bytes],
-        use_cache: bool = True,
         need_word_time_stamp: bool = False,
     ):
-        super().__init__(audio_input, use_cache=use_cache)
+        super().__init__(audio_input)
         self.session = requests.Session()
         self.task_id: Optional[str] = None
         self.__etags: List[str] = []

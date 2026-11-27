@@ -58,5 +58,6 @@ jobs:
           tests/test_asr/test_openvino_backend.py
           tests/test_asr/test_video_encoder.py
           tests/test_asr/test_render_text_encoding.py
+          tests/test_asr/test_asr_no_cache.py
           tests/test_ui/test_version_checker.py
           -q

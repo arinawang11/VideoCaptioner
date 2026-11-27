@@ -64,7 +64,6 @@ def main() -> int:
         model_dir=args.model_dir,
         language=args.language,
         device=args.device,
-        use_cache=False,
         need_word_time_stamp=args.words,
         precision=args.precision,
         precision_hint=args.precision_hint,
