@@ -14,9 +14,14 @@ stdout protocol:
 
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 from pathlib import Path
+
+# 本进程的日志全部写独立文件，避免与 UI 进程共写 app.log 导致轮转时
+# 另一进程 rename 失败（见 core/utils/logger.py）。
+os.environ.setdefault("VIDEOCAPTIONER_LOG_FILE", "openvino_worker.log")
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
