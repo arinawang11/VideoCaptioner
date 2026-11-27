@@ -1,0 +1,51 @@
+name: CI (Intel backend)
+
+on:
+  push:
+    branches:
+      - feat/intel-arc-openvino
+  pull_request:
+    branches:
+      - master
+      - main
+      - dev
+
+concurrency:
+  group: ci-intel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  intel:
+    name: intel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint (Intel backend)
+        run: >-
+          uv run ruff check
+          videocaptioner/core/asr/openvino_asr.py
+          videocaptioner/core/asr/openvino_process.py
+          videocaptioner/core/asr/openvino_worker.py
+          videocaptioner/core/utils/hardware.py
+
+      - name: Unit tests (Intel backend)
+        run: uv run pytest tests/test_asr/test_openvino_backend.py -q
