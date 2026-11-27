@@ -193,8 +193,10 @@ class Config(QConfig):
     faster_whisper_device = OptionsConfigItem(
         "FasterWhisper",
         "Device",
-        "cuda",
-        OptionsValidator(["cuda", "cpu", "intel_gpu", "intel_cpu", "intel_npu"]),
+        "auto",
+        OptionsValidator(
+            ["auto", "cuda", "cpu", "intel_gpu", "intel_cpu", "intel_npu"]
+        ),
     )
     faster_whisper_precision = OptionsConfigItem(
         "FasterWhisper",

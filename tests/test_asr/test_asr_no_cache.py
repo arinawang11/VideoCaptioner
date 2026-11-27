@@ -42,3 +42,9 @@ def test_base_asr_has_no_cache_switch(monkeypatch):
     monkeypatch.setattr(BaseASR, "_get_audio_duration", lambda self: 1.0)
     with pytest.raises(TypeError):
         CountingASR(b"fake-audio-bytes", use_cache=True)
+
+
+def test_rate_limit_cache_is_still_available(monkeypatch):
+    """Only result caching was removed; Bcut/JianYing rate limiting needs it."""
+    asr = _make_asr(monkeypatch)
+    assert asr._cache is not None

@@ -271,3 +271,33 @@ def test_intel_gpu_kind_classification_and_choices(monkeypatch):
     ]
     assert "核显" in choices[0][0]
     assert "独显" in choices[1][0]
+
+def test_transcribe_device_choices_merge_gpu_names():
+    """运行设备下拉框直接包含具体 GPU，选中即绑定到该卡。"""
+    from videocaptioner.ui.components.TranscribeDeviceCard import (
+        build_device_choices,
+    )
+
+    gpus = [
+        ("Intel(R) UHD Graphics 770  ·  核显", "Intel(R) UHD Graphics 770"),
+        (
+            "Intel(R) Arc(TM) Pro B50 Graphics  ·  独显",
+            "Intel(R) Arc(TM) Pro B50 Graphics",
+        ),
+    ]
+    choices = build_device_choices(gpus)
+
+    displays = [display for display, _device, _gpu in choices]
+    assert displays[0].startswith("自动选择")
+    assert all("Intel GPU · " in d for d in displays[2:4])
+    assert choices[1] == ("Intel GPU（自动，优先独显）", "intel_gpu", "")
+    assert [c[2] for c in choices[2:4]] == [name for _d, name in gpus]
+    assert [c[1] for c in choices[2:4]] == ["intel_gpu", "intel_gpu"]
+
+    # NPU / CPU / CUDA entries remain available after the GPU entries.
+    tail = [c[1] for c in choices[4:]]
+    assert tail == ["intel_npu", "intel_cpu", "cuda", "cpu"]
+
+    # Without display enumeration the automatic Intel GPU entry must survive.
+    no_gpu = build_device_choices([])
+    assert ("Intel GPU（自动，优先独显）", "intel_gpu", "") in no_gpu

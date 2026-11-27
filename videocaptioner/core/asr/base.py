@@ -8,6 +8,7 @@ from typing import Callable, Optional, Union
 
 from pydub import AudioSegment
 
+from videocaptioner.core.utils.cache import get_asr_cache
 from videocaptioner.core.utils.logger import setup_logger
 
 from .asr_data import ASRData, ASRDataSeg
@@ -49,6 +50,9 @@ class BaseASR:
         self.audio_input = audio_input
         self.file_binary = None
         self._set_data()
+        # Cache is used only for public-service rate limiting (see
+        # _check_rate_limit); recognition results are never cached.
+        self._cache = get_asr_cache()
         self.audio_duration = self._get_audio_duration()
 
     def _set_data(self):
