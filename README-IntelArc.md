@@ -9,8 +9,9 @@ Whisper 语音转写（不依赖 NVIDIA CUDA，也不上传音频）。
 - 模型：`large-v3-turbo`（按需自动拉取）及其它 Whisper 型号
 - 架构：OpenVINO 跑在独立子进程，UI 进程不加载 OpenVINO
 
-> 归档状态：GPU / NPU / CPU 三条本地路径均已在本机实测通过。
-> 自 v8 起安装包不再内置模型（仅内置 OpenVINO 运行时，约 245 MB），首次使用时按需自动拉取。
+> 归档状态：CPU 与 GPU(f32) 完整通过；NPU 长音频在 QS 样品上会 `DEVICE_LOST`
+> 并回退 CPU（无冻屏）。详见 2.2 版本对照与 v10 说明。
+> 自 v8 起安装包不再内置模型；v10 安装包约 259.9 MB，首次使用时按需自动拉取。
 
 ---
 
@@ -18,14 +19,14 @@ Whisper 语音转写（不依赖 NVIDIA CUDA，也不上传音频）。
 
 ### 使用安装包（推荐）
 
-运行 `VideoCaptioner-IntelArc-Setup-v8.exe`（Windows 10/11 x64，无需管理员权限）。
+运行 `VideoCaptioner-IntelArc-Setup-v10.exe`（Windows 10/11 x64，无需管理员权限）。
 
 安装后：设置 → 转录 → Faster Whisper：
 
 | 选项 | 说明 |
 | --- | --- |
-| 运行设备 | `intel_npu` / `intel_gpu` / `intel_cpu` / `cpu` |
-| 模型 | `large-v3-turbo`（首次转录自动拉取，支持断点续传与重试） |
+| 运行设备 | 合并下拉：自动 / Intel GPU（按名称）/ Intel NPU / Intel CPU / CUDA / CPU |
+| 模型 / 精度 | `large-v3-turbo` 等；INT8 / FP16 可选；首次转录自动拉取 |
 
 模型与配置放在 `%LOCALAPPDATA%\VideoCaptioner`，程序放在
 `%LOCALAPPDATA%\VideoCaptioner-IntelArc`。
@@ -39,8 +40,9 @@ videocaptioner-gui
 
 首次使用会自动下载对应精度的 OpenVINO 模型：
 
-- `intel_gpu` → `whisper-*-fp16-ov`（iGPU 会自动改用 f32 精度提示）
-- `intel_npu` / `intel_cpu` → `whisper-*-int8-ov`
+- 选择 INT8 → `whisper-*-int8-ov`；选择 FP16 → `whisper-*-fp16-ov`
+- iGPU 会自动加 `INFERENCE_PRECISION_HINT=f32`（仅 f32 稳定；int8/无 hint 路径会崩）
+- NPU 仅支持 int8
 
 ---
 
@@ -220,6 +222,8 @@ videocaptioner/
 docs/
   config/intel-arc-gpu.md                # 使用与原理说明
   intel-arc/test-report.md               # 测试与诊断归档
+  intel-arc/test-log-2026-11-27.md       # v10 实测记录
+  intel-arc/release-v10.md               # v10 发布说明与版本兼容性
 build/
   installer.iss                          # Inno Setup 打包定义
   portable/                              # 便携 Python 运行时 + 模型载荷
@@ -239,11 +243,11 @@ build/portable/runtime/python.exe -m pip install --no-deps --force-reinstall dis
 ISCC.exe build/installer.iss
 
 # 3) 产物（不再封装模型，首次运行按需自动拉取）
-dist/VideoCaptioner-IntelArc-Setup-v8.exe
+dist/VideoCaptioner-IntelArc-Setup-v10.exe
 ```
 
-v8 安装包：245.1 MB，SHA-256
-`a86db8c5e0b3eb45aae8aa8646f42fe3485e199d0044fa5b6780ef14ab3716d6`。
+v10 安装包：272,553,687 字节（259.9 MB），SHA-256
+`b7ec7613f26485ec2e625a71e3f9d0ea96ea5faad2587c960e370acff76060ad`。
 
 ---
 

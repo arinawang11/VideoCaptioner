@@ -8,6 +8,9 @@ v10 汇总了设备选择、NPU 稳定性、启动流程和可观测性方面的
 - 安装包：`VideoCaptioner-IntelArc-Setup-v10.exe`，259.9 MB
 - SHA-256：`b7ec7613f26485ec2e625a71e3f9d0ea96ea5faad2587c960e370acff76060ad`
 
+> 各版本（v6–v10）在安装包、模型分发、iGPU int8/f32、NPU 分块与失败回退上的差异，
+> 见 [README-IntelArc.md 第 2.2 节「版本兼容性对照」](https://github.com/liu-nexotic/VideoCaptioner/blob/feat/intel-arc-openvino/README-IntelArc.md)。
+
 > **测试样品说明**：本页性能与问题记录来自一台 **Intel Core Ultra 7 155H QS
 > （Quality Sample，质量验证样品）** 笔记本，并非零售正式版。QS 样品的 iGPU/NPU
 > 硅片步进、固件和驱动兼容性可能与量产机不同。因此文中关于 NPU 长音频
