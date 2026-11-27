@@ -307,16 +307,13 @@ def _download_with_requests(
     os.replace(tmp, dest)
 
 
-def download_file(
+def _download_file_once(
     url: str,
     dest: Path,
     expected_size: int = 0,
     on_percent: Optional[Callable[[int], None]] = None,
 ) -> None:
-    """Download one file with resume support and progress reporting."""
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-
+    """One download attempt: aria2c, then parallel ranges, then requests."""
     control_file = dest.with_name(dest.name + ".aria2")
     if dest.exists() and not control_file.exists():
         if expected_size and dest.stat().st_size != expected_size:
@@ -384,6 +381,39 @@ def download_file(
                 part.unlink(missing_ok=True)
 
     _download_with_requests(url, dest, expected_size, on_percent)
+
+
+def download_file(
+    url: str,
+    dest: Path,
+    expected_size: int = 0,
+    on_percent: Optional[Callable[[int], None]] = None,
+    retries: int = 3,
+) -> None:
+    """Download one file with resume support, progress reporting and retries.
+
+    Flaky networks (SSL resets, dropped connections) abort single requests,
+    which used to fail the whole worker. All backends keep partial data in
+    resumable files, so retrying continues where the previous attempt stopped.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    last_error: Optional[Exception] = None
+    for attempt in range(max(1, retries)):
+        try:
+            _download_file_once(url, dest, expected_size, on_percent)
+            return
+        except Exception as e:  # noqa: BLE001 - retry any transport error
+            last_error = e
+            if attempt < retries - 1:
+                delay = min(30, 2**attempt)
+                _log(
+                    f"Download of {dest.name} failed ({e}), "
+                    f"retrying in {delay}s ({attempt + 1}/{retries})"
+                )
+                time.sleep(delay)
+    raise last_error if last_error else RuntimeError(f"Download failed: {url}")
 
 
 def is_file_ready(path: Path, expected_size: int = 0) -> bool:
@@ -518,6 +548,40 @@ def openvino_whisper_model_dir(
     return Path(model_dir) / "openvino" / repo.split("/")[-1]
 
 
+# Files every OpenVINO Whisper repo ships. A previous download can be
+# interrupted after the two XML files land, leaving the rest missing; checking
+# only the XMLs then quietly breaks inference at pipeline build time (e.g. a
+# missing preprocessor_config.json makes GenAI default to 80 mel bins while
+# large-v3 weights expect 128). Existence checks work offline, so bundled
+# models never trigger a re-download.
+OPENVINO_MODEL_REQUIRED_FILES = (
+    "openvino_encoder_model.xml",
+    "openvino_encoder_model.bin",
+    "openvino_decoder_model.xml",
+    "openvino_decoder_model.bin",
+    "openvino_detokenizer.xml",
+    "openvino_detokenizer.bin",
+    "openvino_tokenizer.xml",
+    "openvino_tokenizer.bin",
+    "preprocessor_config.json",
+    "openvino_config.json",
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+    "normalizer.json",
+    "added_tokens.json",
+    "special_tokens_map.json",
+)
+
+
+def openvino_model_files_complete(model_path: Path) -> bool:
+    """Whether every required OpenVINO model file exists (no size check)."""
+    return all((model_path / name).is_file() for name in OPENVINO_MODEL_REQUIRED_FILES)
+
+
 def ensure_openvino_whisper_model(
     model_name: str,
     model_dir: Path,
@@ -527,10 +591,8 @@ def ensure_openvino_whisper_model(
     """Make sure a pre-converted OpenVINO Whisper model is available."""
     repo = _select_openvino_repo(model_name, precision)
     model_path = openvino_whisper_model_dir(model_dir, model_name, precision=precision)
-    required = model_path / "openvino_encoder_model.xml"
-    decoder = model_path / "openvino_decoder_model.xml"
     tag = f"{model_name} ({precision})" if precision != "fp16" else model_name
-    if required.exists() and decoder.exists():
+    if openvino_model_files_complete(model_path):
         if progress:
             progress(100, f"OpenVINO model {tag} is ready")
         return model_path
