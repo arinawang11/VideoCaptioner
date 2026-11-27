@@ -14,10 +14,19 @@ YEAR = 2026
 APP_NAME = "VideoCaptioner"
 AUTHOR = "Weifeng"
 
-HELP_URL = "https://github.com/WEIFENG2333/VideoCaptioner"
-GITHUB_REPO_URL = "https://github.com/WEIFENG2333/VideoCaptioner"
-RELEASE_URL = "https://github.com/WEIFENG2333/VideoCaptioner/releases/latest"
-FEEDBACK_URL = "https://github.com/WEIFENG2333/VideoCaptioner/issues"
+# Intel compatibility fork: this build tracks the feat/intel-arc-openvino branch.
+IS_INTEL_FORK = True
+BRANCH_NAME = "feat/intel-arc-openvino"
+INTEL_BUILD = 10  # bump with every Intel build (matches the -intel.N release tag)
+FORK_OWNER = "liu-nexotic"
+FORK_REPO = "VideoCaptioner"
+
+GITHUB_REPO_URL = f"https://github.com/{FORK_OWNER}/{FORK_REPO}"
+BRANCH_URL = f"{GITHUB_REPO_URL}/tree/{BRANCH_NAME}"
+HELP_URL = f"{GITHUB_REPO_URL}/blob/{BRANCH_NAME}/README-IntelArc.md"
+RELEASE_URL = f"{GITHUB_REPO_URL}/releases"
+FEEDBACK_URL = f"{GITHUB_REPO_URL}/issues"
+RELEASES_API = f"https://api.github.com/repos/{FORK_OWNER}/{FORK_REPO}/releases?per_page=20"
 
 # Detect whether running from source tree or pip-installed
 _PACKAGE_DIR = Path(__file__).parent

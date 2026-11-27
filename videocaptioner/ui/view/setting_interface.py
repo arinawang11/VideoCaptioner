@@ -21,7 +21,17 @@ from qfluentwidgets import (
 )
 from qfluentwidgets import FluentIcon as FIF
 
-from videocaptioner.config import AUTHOR, FEEDBACK_URL, HELP_URL, RELEASE_URL, VERSION, YEAR
+from videocaptioner.config import (
+    AUTHOR,
+    BRANCH_NAME,
+    BRANCH_URL,
+    FEEDBACK_URL,
+    HELP_URL,
+    INTEL_BUILD,
+    RELEASE_URL,
+    VERSION,
+    YEAR,
+)
 from videocaptioner.core.constant import (
     INFOBAR_DURATION_ERROR,
     INFOBAR_DURATION_SUCCESS,
@@ -233,29 +243,42 @@ class SettingInterface(ScrollArea):
         # 关于卡片
         self.helpCard = HyperlinkCard(
             HELP_URL,
-            self.tr("打开帮助页面"),
+            self.tr("打开分支说明"),
             FIF.HELP,
-            self.tr("帮助"),
-            self.tr("发现新功能并了解有关VideoCaptioner的使用技巧"),
+            self.tr("帮助（Intel 兼容分支）"),
+            self.tr(
+                "本分支保留上游全部功能，并增加 Intel GPU / NPU / CPU 的 "
+                "OpenVINO 本地转录与 QSV 硬件编解码支持"
+            ),
+            self.aboutGroup,
+        )
+        self.branchCard = HyperlinkCard(
+            BRANCH_URL,
+            self.tr("打开分支仓库"),
+            FIF.GITHUB,
+            self.tr("Intel 兼容分支"),
+            self.tr(
+                f"分支 {BRANCH_NAME} · 当前构建 build {INTEL_BUILD} · "
+                "安装包与更新均来自本分支仓库"
+            ),
             self.aboutGroup,
         )
         self.feedbackCard = PrimaryPushSettingCard(
             self.tr("提供反馈"),
             FIF.FEEDBACK,
             self.tr("提供反馈"),
-            self.tr("提供反馈帮助我们改进VideoCaptioner"),
+            self.tr("在本分支仓库提交 Issue，帮助我们改进 VideoCaptioner Intel 版"),
             self.aboutGroup,
         )
         self.aboutCard = PrimaryPushSettingCard(
             self.tr("检查更新"),
             FIF.INFO,
-            self.tr("关于"),
+            self.tr("关于（Intel 兼容分支）"),
             "© "
             + self.tr("版权所有")
             + f" {YEAR}, {AUTHOR}. "
             + self.tr("版本")
-            + " "
-            + VERSION,
+            + f" {VERSION} · Intel build {INTEL_BUILD}",
             self.aboutGroup,
         )
 
@@ -282,6 +305,7 @@ class SettingInterface(ScrollArea):
         self.personalGroup.addSettingCard(self.languageCard)
 
         self.aboutGroup.addSettingCard(self.helpCard)
+        self.aboutGroup.addSettingCard(self.branchCard)
         self.aboutGroup.addSettingCard(self.feedbackCard)
         self.aboutGroup.addSettingCard(self.aboutCard)
 
