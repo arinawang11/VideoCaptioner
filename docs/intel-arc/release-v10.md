@@ -8,6 +8,13 @@ v10 汇总了设备选择、NPU 稳定性、启动流程和可观测性方面的
 - 安装包：`VideoCaptioner-IntelArc-Setup-v10.exe`，259.9 MB
 - SHA-256：`b7ec7613f26485ec2e625a71e3f9d0ea96ea5faad2587c960e370acff76060ad`
 
+> **测试样品说明**：本页性能与问题记录来自一台 **Intel Core Ultra 7 155H QS
+> （Quality Sample，质量验证样品）** 笔记本，并非零售正式版。QS 样品的 iGPU/NPU
+> 硅片步进、固件和驱动兼容性可能与量产机不同。因此文中关于 NPU 长音频
+> `DEVICE_LOST`、GPU int8 路径崩溃、回退 CPU 等结论 **仅代表该样品**，不应直接
+> 推广为正式版硬件的普遍结论。欢迎使用正式版硬件的用户通过 Issue / Release
+> 评论反馈实际表现。
+
 ## 本版变化
 
 ### 1. 设备选择
@@ -49,6 +56,9 @@ NPU 回退后 CPU 从零重跑完整音频：`210.4 s`（`6.6x`），本次**没
 详细过程见 [`test-log-2026-11-27.md`](test-log-2026-11-27.md)。
 
 ## 已知问题
+
+> 以下结论基于 **QS 工程样品**（155H QS）；正式版硬件的 NPU/GPU 稳定性可能不同，
+> 欢迎正式版用户反馈。若正式版上 NPU 长音频稳定，可优先使用 NPU。
 
 ### NPU（Meteor Lake / 3720）
 

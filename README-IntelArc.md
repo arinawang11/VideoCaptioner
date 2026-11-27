@@ -138,8 +138,10 @@ Enable-PnpDevice  -InstanceId 'PCI\VEN_8086&DEV_7D1D&SUBSYS_380C17AA&REV_04\3&11
    出现后建议重启再试，长音频优先用 CPU 或 `small` 模型。
 4. **核显与显示共享硬件**：手动让 iGPU 跑 OpenVINO 长任务仍有冻屏风险，应用不会
    自动回退到核显；默认 f32 也只能保证稳定，不能保证比 CPU 快。
-5. **工程样品硬件**：本机 iGPU 为 `DEV_7D55`、NPU 为 `DEV_7D1D`，零售机行为可能不同；
-   不得更新 BIOS。
+5. **QS 质量验证样品**：本机为 Core Ultra 7 155H **QS（Quality Sample）**，iGPU 为
+   `DEV_7D55`、NPU 为 `DEV_7D1D`；硅片/固件可能与零售正式版不同。本文中 NPU
+   `DEVICE_LOST`、GPU int8 崩溃、CPU 回退等结论 **仅代表该样品**，不能直接推广到
+   正式版硬件；欢迎正式版用户反馈实际表现。不得更新 BIOS。
 6. **词级时间戳**：Intel GPU 不支持 encoder attention 分解，会自动降级为分段
    时间戳。
 
