@@ -46,24 +46,55 @@ videocaptioner-gui
 
 ## 2. 设备选择与实测性能
 
-测试机：Lenovo ThinkBook 13x G4 IMH（21KR），Core Ultra 7 155H，
-32 GB，Arc iGPU，Intel AI Boost NPU 3720，Windows 11 26300。
+> 测试机为 **Core Ultra 7 155H QS（Quality Sample，质量验证样品）**，
+> 32 GB，Arc iGPU 7D55，Intel AI Boost NPU 3720，Windows 11 26300。
+> QS 样品的硅片/固件可能与零售正式版不同，下文的 NPU/GPU 结论仅代表该样品；
+> 欢迎正式版硬件用户反馈实际表现。
 
-| 路径 | 测试音频 | 耗时 | 倍速 |
-| --- | --- | --- | --- |
-| **NPU 3720 + int8** | 整集 1398.9 s | **189.1 s** | **7.4x** |
-| NPU 3720 + int8 | 240 s | 35.0 s | 6.9x |
-| NPU 3720 + int8 | 60 s | 10.5 s | 5.7x |
-| GPU iGPU + int8 + f32 | 60 s | 12.8 s | 4.7x |
-| CPU + int8 | 60 s | 14.2 s | 4.2x |
+### 2.1 v10 实测（2026-11-27）
 
-选择建议：
+| 路径 | 测试音频 | 耗时 | 倍速 | 结果 |
+| --- | --- | --- | --- | --- |
+| **CPU int8** | 整集 1398.9 s | **199.2 s** | **7.0x** | 稳定完成 |
+| **GPU iGPU + int8 + f32** | 整集 1398.9 s | **199.1 s** | **7.0x** | 完成（手动选择） |
+| **NPU 3720 + int8** | 60 s × 14 块 | 约 9.2–10.6 s/块 | **约 6.0x** | 第 15/24 块 `DEVICE_LOST` |
+| NPU 失败后 CPU 重跑 | 整集 | 210.4 s | 6.6x | 安全完成，未冻屏 |
 
-- **追求速度**：`intel_npu`（本机最快）
-- **追求稳定/兼容**：`intel_gpu`；驱动异常时自动切 `intel_cpu`
-- **低功耗/后台**：`intel_npu`
-- NPU 首次使用（缓存为空）会有一次 **约 10 分钟**的模型编译，界面停在
-  “加载模型”，属正常现象；之后命中缓存约 3 秒
+选择建议（v10）：
+
+- **稳定优先**：`intel_cpu`，实测 7.0x，不占用核显/NPU，无崩溃风险；
+- **想用 NPU**：优先 `small` / `base`；`large-v3-turbo` 长音频仍可能
+  `DEVICE_LOST`，会回退 CPU 并从 0 重跑；
+- **核显**：只能用 f32（应用默认），速度约 7.0x，与 CPU 持平；核显与显示共用硬件，
+  手动跑长任务仍有冻屏风险；
+- NPU 首次编译（新缓存键）约 **3–4 分钟**，界面每 10 秒有心跳；之后（含重启）
+  缓存命中约 **3 秒**。
+
+> 历史版本（v6–v9）的 NPU 使用 240 s chunk，整集约 189 s / 7.4x，但
+> `DEVICE_LOST` 风险更高；不同版本的 GPU/CPU/NPU 行为差异见下表。
+
+### 2.2 版本兼容性对照（v6–v10）
+
+| 版本 | 安装包 / 模型 | 核显（iGPU） | NPU | 失败回退 | 设备选择 | 其他 |
+| --- | --- | --- | --- | --- | --- | --- |
+| **v10（当前）** | 259.9 MB，模型按需下载 | **仅 f32**；QS 上 int8/无 hint 会 `CL_OUT_OF_HOST_MEMORY` / `0xc0000409`；约 7.0x | 60 s chunk；约 6.0x；large 长音频可能 `DEVICE_LOST` | **NPU → CPU** | 设备类型与具体 GPU **合并按名称选择**，`自动` 在纯核显机器优先 NPU | 无 ASR 结果缓存；QSV 启动探测已移除；编译心跳 |
+| v9（本地构建，未发布） | 245 MB，模型按需下载 | f32；约 4–7x | 240 s chunk；整集约 7.4x | NPU → GPU → CPU | 枚举设备 + 单独 GPU 名称卡 | 活跃设备标签；QSV 启动探测仍在，部分机器启动可能冻屏 |
+| v8（v10 前 Latest） | 245 MB，模型按需下载 | f32；约 4–7x | 240 s chunk | NPU → GPU → CPU | 枚举设备 | 无活跃设备标签；QSV 启动探测仍在 |
+| v7 | 902.5 MB，**内置模型** | f32（v6 起） | 240 s chunk | NPU → GPU → CPU | 枚举设备 | 安装即带模型，无需首次下载；设备选择较旧 |
+| v6 | 902.5 MB，**内置模型** | **首次强制 f32** | 240 s chunk | NPU → GPU → CPU | 枚举设备 | 用于规避 iGPU fp16 编译器 abort |
+| v5 及更早 | 902.5 MB，**内置模型** | **不强制 f32**；默认/int8 路径依赖已编译的 `.cl_cache` | 240 s chunk | NPU → GPU → CPU | 枚举设备 | 无按名称选择；有 ASR 结果缓存 |
+
+版本差异要点：
+
+- **模型分发**：v7 及更早安装包内置模型（902.5 MB）；v8+ 为瘦安装包，首次使用按需下载。
+- **核显精度**：v6 起对 iGPU 强制 `f32`；v5 及更早走默认/int8 路径。老版本能跑 int8
+  依赖当时机器上已存在的 OpenCL 内核缓存，**不代表在全新机器上也能复现**。
+- **NPU 分块**：v10 为 60 s；v6–v9 为 240 s。240 s 在 QS 样品上更容易触发
+  `DEVICE_LOST`。
+- **失败回退**：v10 起 NPU 失败只回退 **CPU**（不回退核显）；v6–v9 会回退 GPU。
+- **设备选择**：v10 才把设备类型与具体 GPU 名称合并；旧版需分别选择。
+- **结果缓存**：v10 起转录结果不缓存，每次重新识别；旧版会命中 ASR 缓存。
+- **QS 说明**：以上 v10 的 NPU/GPU 结论基于 QS 样品，正式版硬件可能不同。
 
 ---
 
@@ -86,18 +117,21 @@ WER: pythonw.exe  BEX64  0xc0000409  (fast-fail 7 = abort)
 
 - OpenVINO 设备名含 `(iGPU)` → 自动 `INFERENCE_PRECISION_HINT=f32`
 - 独显 `(dGPU)` → 保持 fp16
-- 可用 `VIDEOCAPTIONER_OPENVINO_GPU_PRECISION=f32|fp16` 覆盖
-- 失败重试链：`GPU` → `GPU+f32` → `CPU int8`；`NPU` 失败 → `GPU` → `CPU int8`
+- 可用 `VIDEOCAPTIONER_OPENVINO_GPU_PRECISION=f32|fp16` 覆盖；但 v10 的 QS 核显上
+  fp16/int8/无 hint 路径会崩溃，**只建议保持 f32**
+- 失败重试链：v10 `GPU` → `GPU+f32` → `CPU int8`；`NPU` 失败 → `CPU`
+- v6–v9：`NPU` 失败 → `GPU` → `CPU int8`；v5 及更早没有 f32 强制
 
-### 3.2 NPU 改用原生时间戳 + 限制解码长度
+### 3.2 NPU 原生时间戳 + 分块/解码限制
 
 旧实现为规避 `openvino.genai#4806`，在 NPU 上做“停顿分句 + 逐句无时间戳”。
 OpenVINO 2026.4.1 中该问题已修复，原生时间戳可用。分句会让每句重复跑一次
 固定 30 秒 encoder，是最慢的根源。
 
-现在 NPU 与 GPU 走同一条 240 秒分块 + 原生时间戳路径，并额外传
-`max_new_tokens=448`：不限制 token 数时解码会越过窗口，触发 NPU 驱动看门狗
-（`ZE_RESULT_ERROR_DEVICE_LOST`）。分句方案保留为“时间戳返回空”时的兜底。
+v10 起 NPU 使用 **60 秒分块**（v6–v9 为 240 秒；240 秒在 QS 样品上更容易触发
+`DEVICE_LOST`），并额外传 `max_new_tokens=448`：不限制 token 数时解码会越过窗口，
+触发 NPU 驱动看门狗（`ZE_RESULT_ERROR_DEVICE_LOST`）。分句方案保留为
+“时间戳返回空”时的兜底。
 
 ### 3.3 NPU 设备丢失不能自愈
 
@@ -108,21 +142,32 @@ Disable-PnpDevice -InstanceId 'PCI\VEN_8086&DEV_7D1D&SUBSYS_380C17AA&REV_04\3&11
 Enable-PnpDevice  -InstanceId 'PCI\VEN_8086&DEV_7D1D&SUBSYS_380C17AA&REV_04\3&11583659&0&58' -Confirm:$false
 ```
 
-因此应用层遇到 NPU 失败会整体切到 GPU（f32）继续，不会中断任务。
+因此应用层遇到 NPU 失败时：
+
+- **v10 起**：回退 **CPU**（不回退核显），从 0 重新转录；安全但耗时约翻倍；
+- **v6–v9**：回退 GPU（f32）→ CPU；
+- 持续 `DEVICE_LOST` 仍需 PnP 复位或重启；不要在同一会话反复重建 NPU。
 
 ---
 
 ## 4. 测试证据
 
-完整记录见 [`docs/intel-arc/test-report.md`](docs/intel-arc/test-report.md)。
+v10 实测见 [`docs/intel-arc/test-log-2026-11-27.md`](docs/intel-arc/test-log-2026-11-27.md)。
+以下早期数据来自 v6/v7（NPU 240 s chunk），仅作历史参考，不能直接与 v10 对比：
 
-摘要：
-
-- 整集 NPU：1398.9 s 音频 → 189.1 s，6 块，542 段，覆盖到 `00:23:14`
+- 整集 NPU（v6/v7）：1398.9 s 音频 → 189.1 s，6 块，542 段，覆盖到 `00:23:14`
 - 300 次连续 NPU 生成：全部成功，内存稳定在 ~3.56 GB
 - 早期分句路径累计 ~460 次调用：1 次 `DEVICE_LOST`（约 0.2%）
-- 60 秒音频：NPU 10.5 s / GPU 12.8 s / CPU 14.2 s
-- 单元测试：`pytest tests/test_asr/test_openvino_backend.py` → 13 passed
+- 60 秒音频（旧版）：NPU 10.5 s / GPU 12.8 s / CPU 14.2 s
+- 旧版单元测试：13 passed
+
+v10 实测：
+
+- CPU int8：199.2 s / 1398.9 s → **7.0x**；
+- GPU iGPU + int8 + f32：199.1 s → **7.0x**；
+- NPU 60 s × 14 块约 **6.0x**，第 15/24 块 `DEVICE_LOST` → CPU 全量重跑
+  210.4 s（6.6x），**未冻屏**；
+- 单元测试：**61 passed**（OpenVINO、设备选择、版本检查、无缓存转录等）。
 
 ---
 
@@ -152,8 +197,8 @@ Enable-PnpDevice  -InstanceId 'PCI\VEN_8086&DEV_7D1D&SUBSYS_380C17AA&REV_04\3&11
 | 现象 | 原因 / 处理 |
 | --- | --- |
 | 转写开始后立刻报错，日志无 ERROR | GPU/IGC 原生崩溃；确认是否 iGPU 且已启用 f32 |
-| 停在“加载模型”很久 | NPU/GPU 冷编译；等待，或保留 `models/openvino/.cache` |
-| `NPU inference failed ... falling back to Intel CPU` | NPU 看门狗复位；任务会由 CPU 继续，建议重启后再试 |
+| 停在“加载模型”很久 | NPU 首次编译 3–4 分钟（v10；旧版曾约 10 分钟），之后约 3 秒；保留 `models/openvino/.cache` |
+| `NPU inference failed ... falling back to Intel CPU` | v10 起 NPU 看门狗复位后回退 CPU（旧版回退 GPU）；任务会继续，建议重启后再试 |
 | NPU 一直 `DEVICE_LOST` | PnP 复位 NPU 或重启；不要在同一进程内重建 |
 | iGPU 转录报 `CL_OUT_OF_HOST_MEMORY` / `0xc0000409` | 核显 int8/无 f32 路径不可用；改 CPU 或 f32（应用默认） |
 | `No Intel NPU detected` | 安装 Intel NPU 驱动（≥ 32.0.100.3104） |
