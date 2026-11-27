@@ -238,15 +238,45 @@ def test_resolve_openvino_device_by_adapter_name(monkeypatch):
     assert hw.resolve_openvino_device("intel_gpu", "Not A Real GPU") == "GPU.1"
 
 
-def test_resolve_openvino_device_npu_falls_back_to_named_gpu(monkeypatch):
+def test_resolve_openvino_device_npu_never_falls_back_to_gpu(monkeypatch):
+    """An NPU job must never be silently moved onto the display GPU."""
+    import pytest
+
     import videocaptioner.core.utils.hardware as hw
 
     monkeypatch.setattr(hw, "intel_npu_devices", lambda: [])
     monkeypatch.setattr(hw, "intel_gpu_devices", lambda: list(_FAKE_GPUS))
 
-    assert (
-        hw.resolve_openvino_device("intel_npu", "Intel(R) UHD Graphics 770") == "GPU.0"
-    )
+    with pytest.raises(RuntimeError, match="NPU"):
+        hw.resolve_openvino_device("intel_npu", "Intel(R) UHD Graphics 770")
+
+
+def test_npu_failure_uses_cpu_unless_a_discrete_gpu_exists(monkeypatch):
+    import videocaptioner.core.utils.hardware as hw
+
+    monkeypatch.setattr(hw, "has_discrete_intel_gpu", lambda: False)
+    assert hw.npu_fallback_device() == "intel_cpu"
+    monkeypatch.setattr(hw, "has_discrete_intel_gpu", lambda: True)
+    assert hw.npu_fallback_device() == "intel_gpu"
+
+
+def test_preferred_backend_prefers_npu_on_integrated_gpu(monkeypatch):
+    """iGPU-only Core Ultra laptops default to the NPU (GPU shares the display)."""
+    import videocaptioner.core.utils.hardware as hw
+
+    monkeypatch.setattr(hw, "has_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(hw, "openvino_packages_available", lambda: True)
+    monkeypatch.setattr(hw, "has_intel_gpu", lambda: True)
+    monkeypatch.setattr(hw, "has_intel_npu", lambda: True)
+    monkeypatch.setattr(hw, "has_discrete_intel_gpu", lambda: False)
+    assert hw.preferred_backend_device() == "intel_npu"
+
+    monkeypatch.setattr(hw, "has_discrete_intel_gpu", lambda: True)
+    assert hw.preferred_backend_device() == "intel_gpu"
+
+    monkeypatch.setattr(hw, "has_intel_gpu", lambda: False)
+    monkeypatch.setattr(hw, "has_discrete_intel_gpu", lambda: False)
+    assert hw.preferred_backend_device() == "intel_npu"
 
 def test_intel_gpu_kind_classification_and_choices(monkeypatch):
     import videocaptioner.core.utils.hardware as hw
@@ -254,6 +284,10 @@ def test_intel_gpu_kind_classification_and_choices(monkeypatch):
     assert hw.classify_intel_gpu_name("Intel(R) UHD Graphics 770") == "integrated"
     assert hw.classify_intel_gpu_name("Intel(R) Iris(R) Xe Graphics") == "integrated"
     assert hw.classify_intel_gpu_name("Intel(R) Arc(TM) Pro B50 Graphics") == "discrete"
+    # Meteor Lake's "Arc(TM) Graphics" has no model number: it is the iGPU.
+    assert hw.classify_intel_gpu_name("Intel(R) Arc(TM) Graphics") == "integrated"
+    assert hw.classify_intel_gpu_name("Intel(R) Arc(TM) 140V") == "integrated"
+    assert hw.classify_intel_gpu_name("Intel(R) Arc(TM) A770 Graphics") == "discrete"
     assert hw.classify_intel_gpu_name("GameViewer Virtual Display") == "unknown"
 
     monkeypatch.setattr(

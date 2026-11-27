@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
 from ...config import MODEL_PATH
 from ..entities import SubtitleLayoutEnum
-from ..utils.hardware import resolve_openvino_device
+from ..utils.hardware import npu_fallback_device, resolve_openvino_device
 from ..utils.logger import setup_logger
 from ..utils.model_downloader import (
     OPENVINO_WHISPER_REPOS,
@@ -518,6 +518,11 @@ class OpenVINOASR(BaseASR):
             precision,
             f", hint: {precision_hint}" if precision_hint else "",
         )
+        if getattr(self, "_callback", None):
+            self._callback(
+                2,
+                f"正在编译/加载模型: {device} ({precision})，首次运行可能需要几分钟",
+            )
         if _is_npu_device(device) and self.model_name in (
             "medium",
             "large-v1",
@@ -744,27 +749,42 @@ class OpenVINOASR(BaseASR):
             callback(progress, f"transcribing {index + 1}/{chunk_count}")
         return all_segments
 
-    def _fallback_to_gpu(
+    def _fallback_after_npu_failure(
         self,
         audio: "np.ndarray",
         callback: Callable[[int, str], None],
         exc: Exception,
     ) -> List[ASRDataSeg]:
-        """Recreate the pipeline on the Intel GPU after an NPU failure."""
-        logger.warning(
-            "NPU inference failed (%s); retrying on Intel GPU "
-            "with the already downloaded int8 model",
-            exc,
-        )
-        callback(21, "NPU failed, switching to Intel GPU")
+        """Recover from an NPU failure without touching the display GPU.
+
+        Only a discrete Arc is a safe GPU fallback. Integrated GPUs share
+        silicon with the display, so a hang there freezes the screen; use the
+        CPU in that case.
+        """
+        target = npu_fallback_device()
+        if target == "intel_gpu":
+            logger.warning(
+                "NPU inference failed (%s); retrying on the discrete Intel GPU "
+                "with the already downloaded int8 model",
+                exc,
+            )
+            callback(21, "NPU failed, switching to the discrete Intel GPU")
+            self.device = "intel_gpu"
+            override = "intel_gpu"
+        else:
+            logger.warning(
+                "NPU inference failed (%s); falling back to Intel CPU because "
+                "the integrated GPU shares the display and can freeze the screen",
+                exc,
+            )
+            callback(21, "NPU failed, switching to Intel CPU (safer)")
+            self.device = "intel_cpu"
+            override = "CPU"
         self.pipeline = None
         self.used_device = ""
         self.used_precision = ""
-        self.device = "intel_gpu"
         gc.collect()
-        self._create_pipeline(
-            device_override="intel_gpu", precision_override="int8"
-        )
+        self._create_pipeline(device_override=override, precision_override="int8")
         callback(21, f"设备: {self.used_device_label}")
         return self._transcribe_gpu(audio, callback)
 
@@ -786,7 +806,19 @@ class OpenVINOASR(BaseASR):
             )
 
         try:
-            callback(1, "initializing OpenVINO")
+            requested = (self.device or "auto").lower()
+            if requested.startswith(("intel_npu", "npu")):
+                target_label = "NPU"
+            elif requested.startswith(("intel_gpu", "gpu")):
+                target_label = "Intel GPU"
+            elif requested.startswith(("intel_cpu", "intel-cpu")):
+                target_label = "Intel CPU"
+            else:
+                target_label = "OpenVINO"
+            callback(
+                1,
+                f"正在编译/加载 {target_label} 模型（首次运行可能需要几分钟）",
+            )
             self._create_pipeline()
             callback(20, f"设备: {self.used_device_label}")
 
@@ -804,7 +836,7 @@ class OpenVINOASR(BaseASR):
                 except Exception as exc:
                     if not _is_npu_failure(exc):
                         raise
-                    all_segments = self._fallback_to_gpu(audio, callback, exc)
+                    all_segments = self._fallback_after_npu_failure(audio, callback, exc)
                 else:
                     if not all_segments:
                         logger.warning(
@@ -816,7 +848,7 @@ class OpenVINOASR(BaseASR):
                         except Exception as exc:
                             if not _is_npu_failure(exc):
                                 raise
-                            all_segments = self._fallback_to_gpu(
+                            all_segments = self._fallback_after_npu_failure(
                                 audio, callback, exc
                             )
             else:

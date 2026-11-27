@@ -78,12 +78,45 @@ def classify_intel_gpu_name(name: str) -> str:
     """Return ``discrete`` / ``integrated`` / ``unknown`` for an adapter name."""
     lowered = (name or "").lower()
     if "arc" in lowered:
-        return "discrete"
+        # Arc A/B series and Pro cards are discrete. The bare
+        # "Intel(R) Arc(TM) Graphics" (Meteor Lake) and the Arc 1xxV naming
+        # (Lunar Lake) are integrated GPUs that share silicon with the display.
+        if re.search(r"arc.*\b[ab]\d{2,3}\b", lowered) or "pro" in lowered:
+            return "discrete"
+        return "integrated"
     if any(tag in lowered for tag in ("uhd", "iris", "hd graphics", "graphics 7")):
         return "integrated"
     if "intel" in lowered and "graphics" in lowered:
         return "integrated"
     return "unknown"
+
+
+def has_discrete_intel_gpu() -> bool:
+    """True when a discrete Intel Arc card is present (no OpenVINO import)."""
+    return any(
+        classify_intel_gpu_name(name) == "discrete"
+        for name in intel_gpu_adapters()
+    )
+
+
+def is_integrated_openvino_gpu(name: str) -> bool:
+    """Classify an OpenVINO FULL_DEVICE_NAME (which appends iGPU/dGPU)."""
+    lowered = (name or "").lower()
+    if "(igpu)" in lowered:
+        return True
+    if "(dgpu)" in lowered:
+        return False
+    return classify_intel_gpu_name(name) == "integrated"
+
+
+def npu_fallback_device() -> str:
+    """Where to go when the NPU fails.
+
+    Only fall back to a discrete Arc. An integrated GPU shares silicon with the
+    display, so a driver hang there freezes the whole screen; use the CPU
+    instead of risking a black screen.
+    """
+    return "intel_gpu" if has_discrete_intel_gpu() else "intel_cpu"
 
 
 def openvino_gpu_choices() -> List[Tuple[str, str]]:
@@ -224,18 +257,20 @@ def openvino_packages_available() -> bool:
 def preferred_backend_device() -> str:
     """Pick a sensible default for the ``auto`` device option.
 
-    On Core Ultra laptops (e.g. 155H), the built-in Arc iGPU has ~3x higher
-    Whisper throughput than the 11 TOPS NPU and supports native timestamps, so
-    ``intel_gpu`` is preferred when present; ``intel_npu`` is used when only an
-    NPU is available (or when explicitly selected by the user for low power).
+    Prefer a discrete Arc when present. On iGPU-only Core Ultra laptops the
+    integrated GPU shares silicon with the display, and OpenVINO GPU inference
+    can hang the graphics driver (the whole screen freezes), so the NPU is the
+    safer default there. An explicitly selected intel_gpu still works.
     """
     if has_nvidia_gpu():
         return "cuda"
     if openvino_packages_available():
-        if has_intel_gpu():
+        if has_discrete_intel_gpu():
             return "intel_gpu"
         if has_intel_npu():
             return "intel_npu"
+        if has_intel_gpu():
+            return "intel_gpu"
     return "cpu"
 
 
@@ -341,15 +376,13 @@ def resolve_openvino_device(preference: str, device_name: str = "") -> str:
         npus = intel_npu_devices()
         if npus:
             return _match(npus) or npus[0][0]
-        gpus = intel_gpu_devices()
-        if gpus:
-            if wanted and (matched := _match(gpus)):
-                return matched
-            arc = [(device, name) for device, name in gpus if is_intel_arc(name)]
-            return (arc or gpus)[0][0]
+        # Never silently move an NPU job onto the GPU: on laptops the Intel GPU
+        # is usually the display adapter, and a driver hang there freezes the
+        # screen. Let the caller retry on CPU with a clear message instead.
         raise RuntimeError(
-            "No Intel NPU (AI Boost) detected by OpenVINO. Please install the "
-            "Intel NPU driver (>= 32.0.100.3104 on Windows)."
+            "Intel NPU (AI Boost) is not available right now. It may be busy "
+            "with another task or the driver is not ready. Wait for the "
+            "running NPU job to finish, or select Intel CPU."
         )
 
     if preference.startswith("intel_gpu") or preference.startswith("gpu"):

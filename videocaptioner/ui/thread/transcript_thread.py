@@ -162,7 +162,9 @@ class TranscriptThread(QThread):
             if dev.lower() in ("auto", ""):
                 dev = preferred_backend_device()
             if dev.lower().startswith("intel"):
-                self.device_changed.emit(f"OpenVINO ({dev}，正在探测实际设备...)")
+                self.device_changed.emit(
+                    f"OpenVINO ({dev}，正在加载模型，首次编译可能需要几分钟...)"
+                )
             else:
                 self.device_changed.emit(f"FasterWhisper ({dev})")
         elif model_type == TranscribeModelEnum.WHISPER_CPP:

@@ -40,6 +40,7 @@ from videocaptioner.core.entities import (
     VadMethodEnum,
 )
 from videocaptioner.core.utils.hardware import (
+    classify_intel_gpu_name,
     describe_hardware,
     preferred_backend_device,
 )
@@ -1127,7 +1128,7 @@ class FasterWhisperSettingWidget(QWidget):
                 f"当前选择：自动（本机将使用 {preferred_backend_device()}）"
             ),
             "intel_gpu": self.tr("当前选择：Intel GPU（OpenVINO，优先 Arc 独显，核显自动用 f32）"),
-            "intel_npu": self.tr("当前选择：Intel AI Boost NPU（OpenVINO int8，无 NPU 时自动回退 GPU）"),
+            "intel_npu": self.tr("当前选择：Intel AI Boost NPU（OpenVINO int8，无 NPU 或 NPU 失败时回退 CPU）"),
             "intel_cpu": self.tr("当前选择：Intel CPU（OpenVINO int8，稳定回退）"),
             "cuda": self.tr("当前选择：NVIDIA CUDA（无 NVIDIA 显卡时自动回退 CPU）"),
             "cpu": self.tr("当前选择：CPU（Faster-Whisper）"),
@@ -1135,6 +1136,11 @@ class FasterWhisperSettingWidget(QWidget):
         line1 = hints.get(choice, self.tr("选择本地语音识别所使用的计算设备"))
         if choice == "intel_gpu" and gpu_name:
             line1 = self.tr(f"当前选择：Intel GPU · {gpu_name}（计算固定绑定到该显卡）")
+            if classify_intel_gpu_name(gpu_name) == "integrated":
+                line1 += "\n" + self.tr(
+                    "注意：该核显与显示输出共用硬件，OpenVINO GPU 推理在部分驱动上"
+                    "可能导致黑屏/冻屏；稳定性优先请改用 Intel NPU。"
+                )
         line2 = self.tr(f"本机检测：{describe_hardware()}")
         return f"{line1}\n{line2}"
 

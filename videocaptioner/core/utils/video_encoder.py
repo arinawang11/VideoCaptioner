@@ -433,8 +433,12 @@ def _qsv_device_score(name: str) -> int:
     lowered = (name or "").lower()
     if any(tag in lowered for tag in ("pro ", "b50", "b57", "b58", "a77", "a75", "a58", "a38", "a31")):
         return 3
-    if "arc" in lowered and "graphics" not in lowered:
-        return 2
+    if "arc" in lowered:
+        # "Intel(R) Arc(TM) Graphics" (Meteor Lake) has no model number and is
+        # the integrated GPU; A/B/Pro cards are discrete.
+        if re.search(r"arc.*\b[ab]\d{2,3}\b", lowered):
+            return 2
+        return 0
     if any(tag in lowered for tag in ("uhd", "iris", "igpu")):
         return 0
     return 1
