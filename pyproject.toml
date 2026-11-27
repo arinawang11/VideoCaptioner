@@ -70,6 +70,12 @@ build-backend = "hatchling.build"
 source = "vcs"
 fallback-version = "0.0.0-dev"
 
+# Accept fork tags such as ``v1.4.3-intel.6`` as PEP 440 ``1.4.3`` instead of
+# failing the build. Without this, hatch-vcs raises on any tag containing a
+# non-PEP-440 suffix.
+[tool.hatch.version.raw-options]
+tag_regex = '^(?:[\w-]+-)?(?P<version>[vV]?\d+(?:\.\d+){0,2}(?:(?:a|b|rc)\d+)?(?:\.(?:dev|post)\d+)?)(?:-.*)?(?:\+.*)?$'
+
 [tool.hatch.build.hooks.vcs]
 version-file = "videocaptioner/_version.py"
 
