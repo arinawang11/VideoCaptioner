@@ -9,6 +9,7 @@ on:
       - master
       - main
       - dev
+      - feat/intel-arc-openvino
 
 concurrency:
   group: ci-intel-${{ github.ref }}
