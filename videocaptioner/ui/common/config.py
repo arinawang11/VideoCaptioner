@@ -203,6 +203,8 @@ class Config(QConfig):
         OptionsValidator(OpenVINOModelPrecisionEnum),
         EnumSerializer(OpenVINOModelPrecisionEnum),
     )
+    # 转录使用的具体 Intel GPU 适配器名称（空 = 自动，优先独显）
+    faster_whisper_gpu = ConfigItem("FasterWhisper", "GpuAdapter", "")
     # VAD 参数
     faster_whisper_vad_filter = ConfigItem(
         "FasterWhisper", "VadFilter", True, BoolValidator()

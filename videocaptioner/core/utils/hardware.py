@@ -278,13 +278,35 @@ def intel_npu_available() -> bool:
     return bool(intel_npu_devices())
 
 
-def resolve_openvino_device(preference: str) -> str:
+def _normalize_device_name(name: str) -> str:
+    """Normalize adapter names for matching ("(iGPU)"/"(dGPU)" suffixes differ)."""
+    text = (name or "").lower().strip()
+    for suffix in ("(igpu)", "(dgpu)", "(gpu)", " graphics"):
+        text = text.replace(suffix, " ")
+    return " ".join(text.split())
+
+
+def resolve_openvino_device(preference: str, device_name: str = "") -> str:
     """Map the UI device option to an OpenVINO device string.
 
-    Prefer a discrete Arc GPU over the integrated one, so ``intel_gpu`` does not
-    accidentally run on the iGPU when both are present.
+    ``device_name`` selects a concrete adapter by name (multi-GPU machines);
+    OpenVINO appends "(iGPU)"/"(dGPU)" to the driver name, so matching ignores
+    those suffixes. Falls back to the default policy when the name is unknown.
     """
     preference = (preference or "").lower()
+    wanted = _normalize_device_name(device_name) if device_name else ""
+
+    def _match(devices: List[Tuple[str, str]]) -> str:
+        if not wanted:
+            return ""
+        for device, name in devices:
+            if _normalize_device_name(name) == wanted:
+                return device
+        for device, name in devices:
+            normalized = _normalize_device_name(name)
+            if wanted in normalized or normalized in wanted:
+                return device
+        return ""
 
     if preference.startswith("intel_cpu") or preference.startswith("intel-cpu"):
         return "CPU"
@@ -292,9 +314,11 @@ def resolve_openvino_device(preference: str) -> str:
     if preference.startswith("intel_npu") or preference.startswith("npu"):
         npus = intel_npu_devices()
         if npus:
-            return npus[0][0]
+            return _match(npus) or npus[0][0]
         gpus = intel_gpu_devices()
         if gpus:
+            if wanted and (matched := _match(gpus)):
+                return matched
             arc = [(device, name) for device, name in gpus if is_intel_arc(name)]
             return (arc or gpus)[0][0]
         raise RuntimeError(
@@ -309,6 +333,8 @@ def resolve_openvino_device(preference: str) -> str:
                 "No Intel GPU detected. Please install the Intel graphics driver "
                 "(OpenVINO GPU plugin)."
             )
+        if wanted and (matched := _match(gpus)):
+            return matched
         arc = [(device, name) for device, name in gpus if is_intel_arc(name)]
         return (arc or gpus)[0][0]
 

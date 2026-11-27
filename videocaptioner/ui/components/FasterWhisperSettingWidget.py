@@ -901,6 +901,27 @@ class FasterWhisperSettingWidget(QWidget):
             self.device_card.contentLabel.text()
         )
         self.device_card.comboBox.currentTextChanged.connect(self._on_device_changed)
+
+        # 具体 GPU 适配器（按名称，多显卡机器精确选择）
+        from videocaptioner.core.utils.hardware import intel_gpu_adapters
+        from videocaptioner.ui.components.GpuSettingCard import (
+            GpuComboBoxSettingCard,
+        )
+
+        self.gpu_card = GpuComboBoxSettingCard(
+            self.tr("Intel GPU（按设备名称）"),
+            self.tr(
+                "多显卡机器可按设备名称选择用于转录的 Intel GPU；"
+                "仅在“运行设备”为 intel_gpu 时生效"
+            ),
+            self.setting_group,
+            choices_provider=lambda: [
+                (name, name) for name in intel_gpu_adapters()
+            ],
+            auto_label=self.tr("自动（优先独显）"),
+        )
+        self.gpu_card.setValue(cfg.faster_whisper_gpu.value)
+        self.gpu_card.valueChanged.connect(self._on_gpu_adapter_changed)
         # _, available_devices = check_faster_whisper_exists()
         # if "GPU" not in available_devices:
         #     self.device_card.comboBox.removeItem(0)
@@ -975,6 +996,7 @@ class FasterWhisperSettingWidget(QWidget):
         self.setting_group.addSettingCard(self.precision_card)
         self.setting_group.addSettingCard(self.manage_model_card)
         self.setting_group.addSettingCard(self.device_card)
+        self.setting_group.addSettingCard(self.gpu_card)
         self.setting_group.addSettingCard(self.language_card)
 
         # 添加VAD设置组的卡片
@@ -1002,8 +1024,7 @@ class FasterWhisperSettingWidget(QWidget):
         self.prompt_card.lineEdit.setMinimumWidth(200)
 
         self._update_precision_card_state()
-
-        # 设置滚动区域
+        self._update_gpu_card_state()
         self.scrollArea.setWidget(self.container)
         self.scrollArea.setWidgetResizable(True)
 
@@ -1103,11 +1124,22 @@ class FasterWhisperSettingWidget(QWidget):
         line2 = self.tr(f"本机检测：{describe_hardware()}")
         return f"{line1}\n{line2}"
 
+    def _on_gpu_adapter_changed(self, adapter_name: str):
+        cfg.set(cfg.faster_whisper_gpu, adapter_name or "")
+
+    def _update_gpu_card_state(self):
+        dev = str(cfg.faster_whisper_device.value or "").strip().lower()
+        enabled = dev.startswith("intel_gpu")
+        if hasattr(self, "gpu_card"):
+            self.gpu_card.setEnabled(enabled)
+            self.gpu_card.refresh(cfg.faster_whisper_gpu.value)
+
     def _on_device_changed(self, text: str):
         self.device_card.setContent(self._build_device_description(text))
         self.device_card.contentLabel.setToolTip(self.device_card.contentLabel.text())
         self._refresh_model_combo()
         self._update_precision_card_state()
+        self._update_gpu_card_state()
 
     def _refresh_model_combo(self):
         """根据运行设备刷新可选模型列表"""

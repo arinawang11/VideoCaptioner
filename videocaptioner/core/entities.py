@@ -604,6 +604,7 @@ class TranscribeConfig:
     faster_whisper_model: Optional[FasterWhisperModelEnum] = None
     faster_whisper_model_dir: Optional[str] = None
     faster_whisper_device: str = "cuda"
+    faster_whisper_gpu: str = ""
     faster_whisper_precision: str = ""
     faster_whisper_vad_filter: bool = True
     faster_whisper_vad_threshold: float = 0.5
@@ -642,6 +643,8 @@ class TranscribeConfig:
                 f"Model: {self.faster_whisper_model.value if self.faster_whisper_model else 'None'}"
             )
             lines.append(f"Device: {self.faster_whisper_device}")
+            if self.faster_whisper_gpu:
+                lines.append(f"GPU Adapter: {self.faster_whisper_gpu}")
             if self.faster_whisper_precision:
                 lines.append(f"Precision: {self.faster_whisper_precision}")
             lines.append(f"VAD Filter: {self.faster_whisper_vad_filter}")

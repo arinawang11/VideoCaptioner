@@ -1,7 +1,7 @@
 # coding: utf-8
 """GPU adapter selector card: choose a concrete Intel GPU by its device name."""
 
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from qfluentwidgets import ComboBox, SettingCard
@@ -23,8 +23,12 @@ class GpuComboBoxSettingCard(SettingCard):
         content: Optional[str] = None,
         parent=None,
         icon=FIF.IOT,
+        choices_provider: Optional[Callable[[], List[Tuple[str, str]]]] = None,
+        auto_label: str = AUTO_LABEL,
     ):
         super().__init__(icon, title, content, parent)
+        self._provider = choices_provider or qsv_adapter_choices
+        self._auto_label = auto_label
         self.comboBox = ComboBox(self)
         self.comboBox.setMinimumWidth(300)
         self.hBoxLayout.addWidget(self.comboBox, 1, Qt.AlignRight)  # type: ignore
@@ -35,11 +39,11 @@ class GpuComboBoxSettingCard(SettingCard):
         self.comboBox.currentIndexChanged.connect(self._on_index_changed)
 
     def refresh(self, selected: str = "") -> None:
-        """Rebuild the adapter list from the live QSV probe."""
+        """Rebuild the adapter list from the live probe/provider."""
         try:
-            choices = [(AUTO_LABEL, "")] + qsv_adapter_choices()
+            choices = [(self._auto_label, "")] + list(self._provider())
         except Exception:
-            choices = [(AUTO_LABEL, "")]
+            choices = [(self._auto_label, "")]
 
         current = selected or self.value()
         self._choices = choices

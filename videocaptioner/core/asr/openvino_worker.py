@@ -50,6 +50,7 @@ def main() -> int:
     parser.add_argument("--device", default="intel_gpu")
     parser.add_argument("--precision", default="")
     parser.add_argument("--precision-hint", default="")
+    parser.add_argument("--gpu-name", default="")
     parser.add_argument("--language", default="en")
     parser.add_argument("--output", required=True)
     parser.add_argument("--words", action="store_true")
@@ -67,6 +68,7 @@ def main() -> int:
         need_word_time_stamp=args.words,
         precision=args.precision,
         precision_hint=args.precision_hint,
+        gpu_name=args.gpu_name,
     )
     data = asr.run(callback=emit_progress)
 

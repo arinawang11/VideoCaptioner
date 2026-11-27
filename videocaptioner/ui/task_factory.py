@@ -87,6 +87,7 @@ class TaskFactory:
             faster_whisper_model=cfg.faster_whisper_model.value,
             faster_whisper_model_dir=str(MODEL_PATH),
             faster_whisper_device=cfg.faster_whisper_device.value,
+            faster_whisper_gpu=cfg.faster_whisper_gpu.value,
             faster_whisper_precision=cfg.faster_whisper_precision.value.precision_key,
             faster_whisper_vad_filter=cfg.faster_whisper_vad_filter.value,
             faster_whisper_vad_threshold=cfg.faster_whisper_vad_threshold.value,

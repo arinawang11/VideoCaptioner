@@ -61,6 +61,7 @@ class OpenVINOProcessASR(BaseASR):
         language: str = "en",
         device: str = "intel_gpu",
         precision: str = "",
+        gpu_name: str = "",
         use_cache: bool = False,
         need_word_time_stamp: bool = False,
     ):
@@ -70,6 +71,7 @@ class OpenVINOProcessASR(BaseASR):
         self.language = language
         self.device = device
         self.precision = (precision or "").strip().lower()
+        self.gpu_name = gpu_name or ""
         self.need_word_time_stamp = need_word_time_stamp
         self.active_device_label = ""
 
@@ -101,6 +103,8 @@ class OpenVINOProcessASR(BaseASR):
             cmd.extend(["--precision", str(precision)])
         if precision_hint:
             cmd.extend(["--precision-hint", str(precision_hint)])
+        if self.gpu_name:
+            cmd.extend(["--gpu-name", str(self.gpu_name)])
         if self.need_word_time_stamp:
             cmd.append("--words")
         return cmd

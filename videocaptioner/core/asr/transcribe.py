@@ -153,6 +153,7 @@ def _create_faster_whisper_asr(
             language=config.transcribe_language,
             device=device,
             precision=config.faster_whisper_precision or "",
+            gpu_name=config.faster_whisper_gpu or "",
             use_cache=True,
             need_word_time_stamp=config.need_word_time_stamp,
         )

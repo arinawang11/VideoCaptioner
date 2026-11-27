@@ -377,6 +377,7 @@ class OpenVINOASR(BaseASR):
         need_word_time_stamp: bool = False,
         precision: str = "",
         precision_hint: str = "",
+        gpu_name: str = "",
     ):
         super().__init__(audio_input, use_cache, need_word_time_stamp)
         if whisper_model not in OPENVINO_WHISPER_REPOS:
@@ -387,6 +388,7 @@ class OpenVINOASR(BaseASR):
         self.device = device
         self.precision_override = precision or None
         self.precision_hint = precision_hint or ""
+        self.gpu_name = gpu_name or ""
         self.need_word_time_stamp = need_word_time_stamp
         self.pipeline = None
         self.used_device = ""
@@ -455,7 +457,7 @@ class OpenVINOASR(BaseASR):
             if not device.upper().startswith(("GPU", "CPU", "NPU", "AUTO")):
                 device = resolve_openvino_device(device)
         else:
-            device = resolve_openvino_device(self.device)
+            device = resolve_openvino_device(self.device, self.gpu_name)
         requested_npu = (self.device or "").lower().startswith(
             ("intel_npu", "npu")
         ) and not device_override
@@ -553,7 +555,7 @@ class OpenVINOASR(BaseASR):
                         self._record_runtime_device(device, precision, precision_hint)
                         return pipeline
 
-                fallback = resolve_openvino_device("intel_gpu")
+                fallback = resolve_openvino_device("intel_gpu", self.gpu_name)
                 logger.warning(
                     "NPU failed (%s), falling back to %s", first_err, fallback
                 )

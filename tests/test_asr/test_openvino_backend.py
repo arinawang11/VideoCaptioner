@@ -210,3 +210,40 @@ def test_openvino_model_precision_enum_two_items():
     assert OpenVINOModelPrecisionEnum.FP16.precision_key == "fp16"
     assert "INT8" in OpenVINOModelPrecisionEnum.INT8.value
     assert "FP16" in OpenVINOModelPrecisionEnum.FP16.value
+
+
+_FAKE_GPUS = [
+    ("GPU.0", "Intel(R) UHD Graphics 770 (iGPU)"),
+    ("GPU.1", "Intel(R) Arc(TM) Pro B50 Graphics (dGPU)"),
+]
+
+
+def test_resolve_openvino_device_by_adapter_name(monkeypatch):
+    """Multi-GPU machines pick a concrete GPU by name, not by index."""
+    import videocaptioner.core.utils.hardware as hw
+
+    monkeypatch.setattr(hw, "intel_gpu_devices", lambda: list(_FAKE_GPUS))
+
+    assert (
+        hw.resolve_openvino_device("intel_gpu", "Intel(R) UHD Graphics 770") == "GPU.0"
+    )
+    assert (
+        hw.resolve_openvino_device("intel_gpu", "Intel(R) Arc(TM) Pro B50 Graphics")
+        == "GPU.1"
+    )
+    # OpenVINO appends "(iGPU)"/"(dGPU)" to the driver name; partial names match too.
+    assert hw.resolve_openvino_device("intel_gpu", "Arc(TM) Pro B50") == "GPU.1"
+    # Auto selection and unknown names fall back to the discrete-first policy.
+    assert hw.resolve_openvino_device("intel_gpu", "") == "GPU.1"
+    assert hw.resolve_openvino_device("intel_gpu", "Not A Real GPU") == "GPU.1"
+
+
+def test_resolve_openvino_device_npu_falls_back_to_named_gpu(monkeypatch):
+    import videocaptioner.core.utils.hardware as hw
+
+    monkeypatch.setattr(hw, "intel_npu_devices", lambda: [])
+    monkeypatch.setattr(hw, "intel_gpu_devices", lambda: list(_FAKE_GPUS))
+
+    assert (
+        hw.resolve_openvino_device("intel_npu", "Intel(R) UHD Graphics 770") == "GPU.0"
+    )
