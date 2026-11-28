@@ -58,6 +58,22 @@ Windows `10.0.26300`，OpenVINO `2026.4.1`，模型 `large-v3-turbo-int8-ov`。
 NPU 回退后 CPU 从零重跑完整音频：`210.4 s`（`6.6x`），本次**没有冻屏/死机**，但整体任务约 6 分钟。
 详细过程见 [`test-log-2026-11-27.md`](https://github.com/liu-nexotic/VideoCaptioner/blob/v1.4.3-intel.10/docs/intel-arc/test-log-2026-11-27.md)。
 
+### 桌面参考（非 QS 笔记本）
+
+本机台式机的 **Arc Pro B50 / UHD 770 + int8 / fp16 人工测试均通过**，agent 实测如下
+（OpenVINO `2026.4.1`，`large-v3-turbo`，240 s chunk）：
+
+| 设备 | 模型 / 计算精度 | 音频 | 耗时 | 倍速 |
+| --- | --- | --- | --- | --- |
+| Arc Pro B50（dGPU） | int8 模型，默认 fp16 | 整集 1340.1 s | 19.74 s | **67.9x** |
+| Arc Pro B50（dGPU） | fp16 模型，fp16 | 整集 1340.1 s | 26.16 s | **51.2x** |
+| UHD 770（iGPU） | int8 模型，f32 | 90 s 短片 | 42.44 s | **2.12x** |
+| UHD 770（iGPU） | fp16 模型，f32 | 90 s 短片 | 46.65 s | **1.93x** |
+
+- dGPU 非常快，适合长视频；同样 f32 条件下 int8 模型略快于 fp16。
+- UHD 770 全段约 `2.5x`（1340 s 实测 533 s），过慢，本次只做 90 s 短片测试。
+- 台式机与 QS 笔记本硬件/驱动不同，以上仅作参考，不能与笔记本数字直接对比。
+
 ## 已知问题
 
 > 以下结论基于 **QS 工程样品**（155H QS）；正式版硬件的 NPU/GPU 稳定性可能不同，
